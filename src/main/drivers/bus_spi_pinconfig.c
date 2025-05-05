@@ -88,7 +88,11 @@ const spiHardware_t spiHardware[] = {
         },
         .mosiPins = {
             { DEFIO_TAG_E(PB5) },
+#ifdef SPIFIX
+            { DEFIO_TAG_E(PD6) },
+#else
             { DEFIO_TAG_E(PC12) },
+#endif
         },
         .af = GPIO_AF_SPI3,
         .rcc = RCC_APB1(SPI3),
@@ -461,7 +465,7 @@ void spiPinConfigure(const spiPinConfig_t *pConfig)
             if (pConfig[device].ioTagMosi == hw->mosiPins[pindex].pin) {
                 pDev->mosi = hw->mosiPins[pindex].pin;
 #if defined(USE_PIN_AF)
-                pDev->mosiAF = hw->mosiPins[pindex].af;
+		pDev->mosiAF = hw->mosiPins[pindex].af;
 #endif
             }
         }

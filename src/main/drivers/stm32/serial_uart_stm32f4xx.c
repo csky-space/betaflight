@@ -218,6 +218,34 @@ const uartHardware_t uartHardware[UARTDEV_COUNT] = {
         .rxBufferSize = sizeof(uart6RxBuffer),
     },
 #endif
+
+/*
+#ifdef USE_UART7
+    {
+        .device = UARTDEV_7,
+        .reg = UART7,
+        .rxDMAChannel = DMA_Channel_4,
+        .txDMAChannel = DMA_Channel_4,
+#ifdef USE_UART7_RX_DMA
+        .rxDMAResource = (dmaResource_t *)DMA1_Stream3,
+#endif
+#ifdef USE_UART7_TX_DMA
+        .txDMAResource = (dmaResource_t *)DMA1_Stream1,
+#endif
+        .rxPins = { { DEFIO_TAG_E(PE7) } },
+        .txPins = { { DEFIO_TAG_E(PE8) } },
+        .af = GPIO_AF_UART7,
+        .rcc = RCC_APB1(UART7),
+        .irqn = UART7_IRQn,
+        .txPriority = NVIC_PRIO_SERIALUART7_TXDMA,
+        .rxPriority = NVIC_PRIO_SERIALUART7,
+        .txBuffer = uart7TxBuffer,
+        .rxBuffer = uart7RxBuffer,
+        .txBufferSize = sizeof(uart7TxBuffer),
+        .rxBufferSize = sizeof(uart7RxBuffer),
+    },
+#endif
+*/
 };
 
 bool checkUsartTxOutput(uartPort_t *s)

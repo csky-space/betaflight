@@ -95,7 +95,13 @@ void spiInitDevice(SPIDevice device)
 
     IOConfigGPIOAF(IOGetByTag(spi->sck),  SPI_IO_AF_SCK_CFG, spi->af);
     IOConfigGPIOAF(IOGetByTag(spi->miso), SPI_IO_AF_SDI_CFG, spi->af);
-    IOConfigGPIOAF(IOGetByTag(spi->mosi), SPI_IO_AF_CFG, spi->af);
+
+#ifdef SPIFIX
+    if (device == SPIDEV_3)
+        IOConfigGPIOAF(IOGetByTag(spi->mosi), SPI_IO_AF_CFG, GPIO_AF5_SPI3);
+    else
+#endif
+        IOConfigGPIOAF(IOGetByTag(spi->mosi), SPI_IO_AF_CFG, spi->af);
 
     // Init SPI hardware
     SPI_I2S_DeInit(spi->dev);
