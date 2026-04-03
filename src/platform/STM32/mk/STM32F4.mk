@@ -165,9 +165,9 @@ STARTUP_SRC     = STM32/startup/startup_stm32f40xx.s
 MCU_FLASH_SIZE  := 1024
 
 else ifeq ($(TARGET_MCU),STM32F427xx)
-DEVICE_FLAGS    = -DSTM32F427_437xx
-LD_SCRIPT       = $(LINKER_DIR)/stm32_flash_f427xg.ld
-STARTUP_SRC     = startup_stm32f427xx.s
+DEVICE_FLAGS    += -DSTM32F427_437xx
+LD_SCRIPT       = $(LINKER_DIR)/stm32_flash_f427.ld
+STARTUP_SRC     = STM32/startup/startup_stm32f427xx.s
 MCU_FLASH_SIZE  := 1024
 
 else ifeq ($(TARGET_MCU),STM32F446xx)

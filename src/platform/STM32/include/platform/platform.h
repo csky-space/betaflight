@@ -370,7 +370,7 @@ extern uint8_t _dmaram_end__;
 #endif
 
 #if defined(STM32F4) || defined(STM32G4)
-#define MAX_SPI_PIN_SEL 2
+#define MAX_SPI_PIN_SEL 3
 #elif defined(STM32F7)
 #define MAX_SPI_PIN_SEL 4
 #elif defined(STM32H7)

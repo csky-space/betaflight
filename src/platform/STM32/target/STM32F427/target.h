@@ -34,19 +34,12 @@
 
 #define USE_VCP
 
-//#define USE_SOFTSERIAL
-
-#define UNIFIED_SERIAL_PORT_COUNT       1
-
 #define USE_UART1
 #define USE_UART2
 #define USE_UART3
 #define USE_UART4
 #define USE_UART5
 #define USE_UART6
-
-
-#define SERIAL_PORT_COUNT       (UNIFIED_SERIAL_PORT_COUNT + 6)
 
 //#define USE_INVERTER
 
@@ -81,5 +74,8 @@
 #define USE_ADC
 
 #define USE_EXTI
+
+#define USE_PID_DENOM_CHECK
+#define USE_PID_DENOM_OVERCLOCK_LEVEL 2
 
 #define FLASH_PAGE_SIZE ((uint32_t)0x4000) // 16K sectors
