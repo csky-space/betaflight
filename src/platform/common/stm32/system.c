@@ -337,7 +337,7 @@ const mcuTypeInfo_t *getMcuTypeInfo(void)
 #elif defined(STM32F411xE)
         { .id = MCU_TYPE_F411, .name = "STM32F411" },
 #elif defined(STM32F427_437xx)
-        { .id = MCU_TYPE_F411, .name = "STM32F427" },
+        { .id = MCU_TYPE_F427, .name = "STM32F427" },
 #elif defined(STM32F446xx)
         { .id = MCU_TYPE_F446, .name = "STM32F446" },
 #elif defined(STM32F722xx)
@@ -370,6 +370,8 @@ const mcuTypeInfo_t *getMcuTypeInfo(void)
         { .id = MCU_TYPE_APM32F405, .name = "APM32F405" },
 #elif defined(APM32F407)
         { .id = MCU_TYPE_APM32F407, .name = "APM32F407" },
+#elif defined(STM32N657xx)
+        { .id = MCU_TYPE_N657, .name = "STM32N657" },
 #else
 #error MCU Type info not defined for STM (or clone)
 #endif

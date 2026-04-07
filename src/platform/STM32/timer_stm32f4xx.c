@@ -31,6 +31,7 @@
 #include "stm32f4xx.h"
 #include "platform/rcc.h"
 #include "drivers/timer.h"
+#include "platform/timer.h"
 
 const timerDef_t timerDefinitions[HARDWARE_TIMER_DEFINITION_COUNT] = {
     { .TIMx = TIM1,  .rcc = RCC_APB2(TIM1),  .inputIrq = TIM1_CC_IRQn},
@@ -222,7 +223,7 @@ const timerHardware_t fullTimerHardware[FULL_TIMER_CHANNEL_COUNT] = {
     7                               TIM8_CH1    TIM8_CH2    TIM8_CH3                TIM8_CH4
 */
 
-uint32_t timerClock(const TIM_TypeDef *tim)
+uint32_t timerClockFromInstance(const timerResource_t *tim)
 {
 #if defined(STM32F411xE)
     UNUSED(tim);
@@ -236,5 +237,10 @@ uint32_t timerClock(const TIM_TypeDef *tim)
 #else
     #error "No timer clock defined correctly for MCU"
 #endif
+}
+
+uint32_t timerClock(const timerHardware_t *timHw)
+{
+    return timerClockFromInstance(timHw->tim);
 }
 #endif
