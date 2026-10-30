@@ -723,6 +723,7 @@ TARGETS_FLASH = $(addsuffix _flash,$(BASE_TARGETS))
 $(TARGETS_FLASH):
 	$(V0) $(MAKE) hex TARGET=$(subst _flash,,$@)
 ifneq (,$(findstring /dev/ttyUSB,$(SERIAL_DEVICE)))
+
 	$(V0) $(MAKE) tty_flash TARGET=$(subst _flash,,$@)
 else
 	$(V0) $(MAKE) dfu_flash TARGET=$(subst _flash,,$@)
