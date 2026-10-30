@@ -57,7 +57,8 @@ typedef enum {
     SPIDEV_3,
     SPIDEV_4,
     SPIDEV_5,
-    SPIDEV_6
+    SPIDEV_6,
+    SPIDEV_7
 } spiDevice_e;
 
 // Macros to convert between CLI bus number and spiDevice_e.
@@ -96,6 +97,8 @@ void spiWait(const extDevice_t *dev);
 void spiRelease(const extDevice_t *dev);
 // Return true if DMA engine is busy
 bool spiIsBusy(const extDevice_t *dev);
+// Abandon the DMA transfer in progress for this device, then start any transfer queued behind it
+void spiAbortTransfer(const extDevice_t *dev);
 
 // Link two segment lists
 void spiLinkSegments(const extDevice_t *dev, busSegment_t *firstSegment, busSegment_t *secondSegment);
@@ -139,6 +142,7 @@ bool spiUseDMA(const extDevice_t *dev);
 bool spiUseSDO_DMA(const extDevice_t *dev);
 void spiBusDeviceRegister(const extDevice_t *dev);
 uint8_t spiGetRegisteredDeviceCount(void);
+uint16_t spiGetErrorCounter(void);
 uint8_t spiGetExtDeviceCount(const extDevice_t *dev);
 
 // Common code to process linked segments, to be called from spiSequenceStart.

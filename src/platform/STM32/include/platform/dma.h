@@ -82,14 +82,133 @@
                                                                     handler(&dmaDescriptors[index]); \
                                                             }
 
-#define DMA_CLEAR_FLAG(d, flag) if (d->flagsShift > 31) ((DMA_TypeDef*)(d)->dma)->HIFCR = (flag << (d->flagsShift - 32)); else ((DMA_TypeDef*)(d)->dma)->LIFCR = (flag << d->flagsShift)
-#define DMA_GET_FLAG_STATUS(d, flag) (d->flagsShift > 31 ? ((DMA_TypeDef*)(d)->dma)->HISR & (flag << (d->flagsShift - 32)): ((DMA_TypeDef*)(d)->dma)->LISR & (flag << d->flagsShift))
+// (flag) and (d) are parenthesised deliberately. Callers pass OR-ed masks, and
+// without the parentheses `A | B` binds as `A | (B << flagsShift)`: only the last
+// flag lands on this stream and the rest write ones into bits 0-5, which are
+// stream 0's flags in the low register and stream 4's in the high one.
+#define DMA_CLEAR_FLAG(d, flag) \
+    do { \
+        if ((d)->flagsShift > 31) { \
+            ((DMA_TypeDef*)(d)->dma)->HIFCR = ((flag) << ((d)->flagsShift - 32)); \
+        } else { \
+            ((DMA_TypeDef*)(d)->dma)->LIFCR = ((flag) << (d)->flagsShift); \
+        } \
+    } while (0)
+#define DMA_GET_FLAG_STATUS(d, flag) ((d)->flagsShift > 31 ? ((DMA_TypeDef*)(d)->dma)->HISR & ((flag) << ((d)->flagsShift - 32)): ((DMA_TypeDef*)(d)->dma)->LISR & ((flag) << (d)->flagsShift))
 
 #define DMA_IT_TCIF         ((uint32_t)0x00000020)
 #define DMA_IT_HTIF         ((uint32_t)0x00000010)
 #define DMA_IT_TEIF         ((uint32_t)0x00000008)
 #define DMA_IT_DMEIF        ((uint32_t)0x00000004)
 #define DMA_IT_FEIF         ((uint32_t)0x00000001)
+
+#elif defined(STM32H5)
+
+#define GPDMA1_CH0_HANDLER     (DMA_FIRST_HANDLER + 0)
+#define GPDMA1_CH1_HANDLER     (DMA_FIRST_HANDLER + 1)
+#define GPDMA1_CH2_HANDLER     (DMA_FIRST_HANDLER + 2)
+#define GPDMA1_CH3_HANDLER     (DMA_FIRST_HANDLER + 3)
+#define GPDMA1_CH4_HANDLER     (DMA_FIRST_HANDLER + 4)
+#define GPDMA1_CH5_HANDLER     (DMA_FIRST_HANDLER + 5)
+#define GPDMA1_CH6_HANDLER     (DMA_FIRST_HANDLER + 6)
+#define GPDMA1_CH7_HANDLER     (DMA_FIRST_HANDLER + 7)
+#define GPDMA2_CH0_HANDLER     (DMA_FIRST_HANDLER + 8)
+#define GPDMA2_CH1_HANDLER     (DMA_FIRST_HANDLER + 9)
+#define GPDMA2_CH2_HANDLER     (DMA_FIRST_HANDLER + 10)
+#define GPDMA2_CH3_HANDLER     (DMA_FIRST_HANDLER + 11)
+#define GPDMA2_CH4_HANDLER     (DMA_FIRST_HANDLER + 12)
+#define GPDMA2_CH5_HANDLER     (DMA_FIRST_HANDLER + 13)
+#define GPDMA2_CH6_HANDLER     (DMA_FIRST_HANDLER + 14)
+#define GPDMA2_CH7_HANDLER     (DMA_FIRST_HANDLER + 15)
+#define DMA_LAST_HANDLER       GPDMA2_CH7_HANDLER
+
+#define DMA_DEVICE_NO(x)    ((((x)-1) / 8) + 1)
+#define DMA_DEVICE_INDEX(x) ((((x)-1) % 8))
+#define DMA_OUTPUT_INDEX    0
+#define DMA_OUTPUT_STRING   "DMA%d Channel %d:"
+
+#define DEFINE_DMA_CHANNEL(d, c, f) { \
+    .dma = d, \
+    .ref = (dmaResource_t *)d ## _Channel ## c, \
+    .irqHandlerCallback = NULL, \
+    .flagsShift = f, \
+    .irqN = d ## _Channel ## c ## _IRQn, \
+    .userParam = 0, \
+    .resourceOwner.owner = 0, \
+    .resourceOwner.index = 0 \
+    }
+
+#define DEFINE_DMA_IRQ_HANDLER(d, c, i) FAST_IRQ_HANDLER void d ## _Channel ## c ## _IRQHandler(void) {\
+                                                                const uint8_t index = DMA_IDENTIFIER_TO_INDEX(i); \
+                                                                dmaCallbackHandlerFuncPtr handler = dmaDescriptors[index].irqHandlerCallback; \
+                                                                if (handler) \
+                                                                    handler(&dmaDescriptors[index]); \
+                                                            }
+
+// H5 GPDMA uses per-channel flag registers (CSR for status, CFCR for clear)
+#define DMA_CLEAR_FLAG(d, flag) ((DMA_Channel_TypeDef*)(d)->ref)->CFCR = (flag)
+#define DMA_GET_FLAG_STATUS(d, flag) (((DMA_Channel_TypeDef*)(d)->ref)->CSR & (flag))
+
+#define DMA_IT_TCIF         DMA_CSR_TCF
+#define DMA_IT_HTIF         DMA_CSR_HTF
+#define DMA_IT_TEIF         DMA_CSR_DTEF
+
+#elif defined(STM32C5)
+
+#define LPDMA1_CH0_HANDLER     (DMA_FIRST_HANDLER + 0)
+#define LPDMA1_CH1_HANDLER     (DMA_FIRST_HANDLER + 1)
+#define LPDMA1_CH2_HANDLER     (DMA_FIRST_HANDLER + 2)
+#define LPDMA1_CH3_HANDLER     (DMA_FIRST_HANDLER + 3)
+#define LPDMA1_CH4_HANDLER     (DMA_FIRST_HANDLER + 4)
+#define LPDMA1_CH5_HANDLER     (DMA_FIRST_HANDLER + 5)
+#define LPDMA1_CH6_HANDLER     (DMA_FIRST_HANDLER + 6)
+#define LPDMA1_CH7_HANDLER     (DMA_FIRST_HANDLER + 7)
+#define LPDMA2_CH0_HANDLER     (DMA_FIRST_HANDLER + 8)
+#define LPDMA2_CH1_HANDLER     (DMA_FIRST_HANDLER + 9)
+#define LPDMA2_CH2_HANDLER     (DMA_FIRST_HANDLER + 10)
+#define LPDMA2_CH3_HANDLER     (DMA_FIRST_HANDLER + 11)
+#if defined(STM32C562xx)
+// STM32C562 LPDMA2 only has channels 0-3
+#define DMA_LAST_HANDLER       LPDMA2_CH3_HANDLER
+#else
+#define LPDMA2_CH4_HANDLER     (DMA_FIRST_HANDLER + 12)
+#define LPDMA2_CH5_HANDLER     (DMA_FIRST_HANDLER + 13)
+#define LPDMA2_CH6_HANDLER     (DMA_FIRST_HANDLER + 14)
+#define LPDMA2_CH7_HANDLER     (DMA_FIRST_HANDLER + 15)
+#define DMA_LAST_HANDLER       LPDMA2_CH7_HANDLER
+#endif
+
+#define DMA_DEVICE_NO(x)    ((((x)-1) / 8) + 1)
+#define DMA_DEVICE_INDEX(x) ((((x)-1) % 8))
+#define DMA_OUTPUT_INDEX    0
+#define DMA_OUTPUT_STRING   "DMA%d Channel %d:"
+
+// C5 LPDMA uses _CH naming for both register blocks and IRQs
+#define DEFINE_DMA_CHANNEL(d, c, f) { \
+    .dma = d, \
+    .ref = (dmaResource_t *)d ## _CH ## c, \
+    .irqHandlerCallback = NULL, \
+    .flagsShift = f, \
+    .irqN = d ## _CH ## c ## _IRQn, \
+    .userParam = 0, \
+    .resourceOwner.owner = 0, \
+    .resourceOwner.index = 0 \
+    }
+
+#define DEFINE_DMA_IRQ_HANDLER(d, c, i) FAST_IRQ_HANDLER void d ## _CH ## c ## _IRQHandler(void) {\
+                                                                const uint8_t index = DMA_IDENTIFIER_TO_INDEX(i); \
+                                                                dmaCallbackHandlerFuncPtr handler = dmaDescriptors[index].irqHandlerCallback; \
+                                                                if (handler) \
+                                                                    handler(&dmaDescriptors[index]); \
+                                                            }
+
+// C5 LPDMA uses per-channel flag registers (CSR for status, CFCR for clear)
+#define DMA_CLEAR_FLAG(d, flag) ((DMA_Channel_TypeDef*)(d)->ref)->CFCR = (flag)
+#define DMA_GET_FLAG_STATUS(d, flag) (((DMA_Channel_TypeDef*)(d)->ref)->CSR & (flag))
+
+#define DMA_IT_TCIF         DMA_CSR_TCF
+#define DMA_IT_HTIF         DMA_CSR_HTF
+#define DMA_IT_TEIF         DMA_CSR_DTEF
 
 #elif defined(STM32N6)
 
@@ -224,8 +343,12 @@ uint32_t dmaGetChannel(const uint8_t channel);
                                                                             handler(&dmaDescriptors[index]); \
                                                                     }
 
-#define DMA_CLEAR_FLAG(d, flag) ((DMA_TypeDef*)(d)->dma)->IFCR = (flag << d->flagsShift)
-#define DMA_GET_FLAG_STATUS(d, flag) (((DMA_TypeDef*)(d)->dma)->ISR & (flag << d->flagsShift))
+// (flag) and (d) are parenthesised deliberately. Callers pass OR-ed masks, and
+// without the parentheses `A | B` binds as `A | (B << flagsShift)`: only the last
+// flag lands on this channel and the rest write ones into the low bits, which are
+// the first channel's flags.
+#define DMA_CLEAR_FLAG(d, flag) ((DMA_TypeDef*)(d)->dma)->IFCR = ((flag) << (d)->flagsShift)
+#define DMA_GET_FLAG_STATUS(d, flag) (((DMA_TypeDef*)(d)->dma)->ISR & ((flag) << (d)->flagsShift))
 
 #define DMA_IT_TCIF         ((uint32_t)0x00000002)
 #define DMA_IT_HTIF         ((uint32_t)0x00000004)
@@ -258,6 +381,8 @@ uint32_t dmaGetChannel(const uint8_t channel);
         (((DMA_Stream_TypeDef *)(reg))->CR & DMA_SxCR_EN) : \
         (((BDMA_Channel_TypeDef *)(reg))->CCR & BDMA_CCR_EN)
 #endif
+#elif defined(STM32C5)
+#define IS_DMA_ENABLED(reg) (((DMA_ARCH_TYPE *)(reg))->CCR & DMA_CCR_EN)
 #elif defined(STM32N6)
 #define IS_DMA_ENABLED(reg) (((DMA_ARCH_TYPE *)(reg))->CCR & DMA_CCR_EN)
 #elif defined(STM32G4)

@@ -34,6 +34,13 @@ typedef enum {
     TABLE_GPS_UBLOX_MODELS,
     TABLE_GPS_UBLOX_UTC_STANDARD,
 #endif
+#ifndef USE_WING
+    TABLE_AP_YAW_MODE,
+#endif
+#if !defined(USE_WING) || ENABLE_FLIGHT_PLAN
+    TABLE_AP_RX_LOSS_POLICY,
+    TABLE_AP_GEOFENCE_ACTION,
+#endif
 #ifdef USE_GPS_RESCUE
     TABLE_GPS_RESCUE_SANITY_CHECK,
     TABLE_GPS_RESCUE_ALT_MODE,
@@ -88,6 +95,9 @@ typedef enum {
 #ifdef USE_OPTICALFLOW
     TABLE_OPTICALFLOW_HARDWARE,
 #endif
+#ifdef USE_PITOT
+    TABLE_PITOT_HARDWARE,
+#endif
 #ifdef USE_POSITION_HOLD
     TABLE_POSHOLD_SOURCE,
 #endif
@@ -136,6 +146,9 @@ typedef enum {
     TABLE_FEEDFORWARD_AVERAGING,
     TABLE_DSHOT_BITBANGED_TIMER,
     TABLE_OSD_DISPLAYPORT_DEVICE,
+#ifdef USE_VTX_COMMON
+    TABLE_VTX_TYPE,
+#endif
 #ifdef USE_OSD
     TABLE_OSD_LOGO_ON_ARMING,
 #if ENABLE_OSD_CUSTOM_TEXT
@@ -156,7 +169,15 @@ typedef enum {
 #ifdef USE_WING
     TABLE_TPA_SPEED_TYPE,
     TABLE_YAW_TYPE,
+    TABLE_LOITER_DIRECTION,
 #endif // USE_WING
+#ifdef USE_TRANSPONDER
+    TABLE_TRANSPONDER_PROVIDER,
+#endif
+    TABLE_BAUD_RATE,
+#ifdef USE_TELEMETRY
+    TABLE_TELEMETRY_PROTOCOL,
+#endif
     LOOKUP_TABLE_COUNT
 } lookupTableIndex_e;
 
@@ -191,7 +212,24 @@ typedef enum {
     MODE_ARRAY = (2 << VALUE_MODE_OFFSET),
     MODE_BITSET = (3 << VALUE_MODE_OFFSET),
     MODE_STRING = (4 << VALUE_MODE_OFFSET),
+    // Sparse enum shown by name.  A lookup table cannot index these, so the
+    // owning subsystem supplies the name/value conversion via the registry
+    // below and the setting stores the raw identifier.
+    MODE_LOOKUP_IDENTIFIER = (5 << VALUE_MODE_OFFSET),
 } cliValueFlag_e;
+
+typedef enum {
+    IDENTIFIER_LOOKUP_SERIAL_PORT = 0,
+    IDENTIFIER_LOOKUP_COUNT
+} identifierLookupIndex_e;
+
+typedef struct identifierLookupEntry_s {
+    const char *(*nameOf)(int value);              // NULL when the value is unknown
+    bool (*valueOf)(const char *name, int *value);
+    const char *(*nameAt)(unsigned index);         // enumeration, NULL past the end
+} identifierLookupEntry_t;
+
+extern const identifierLookupEntry_t identifierLookups[IDENTIFIER_LOOKUP_COUNT];
 
 #define VALUE_TYPE_MASK (0x07)
 #define VALUE_SECTION_MASK (0x38)
@@ -211,6 +249,10 @@ typedef struct cliLookupTableConfig_s {
     const lookupTableIndex_e tableIndex;
 } cliLookupTableConfig_t;
 
+typedef struct cliIdentifierLookupConfig_s {
+    const uint8_t lookupIndex;                // identifierLookupIndex_e
+} cliIdentifierLookupConfig_t;
+
 typedef struct cliArrayLengthConfig_s {
     const uint8_t length;
 } cliArrayLengthConfig_t;
@@ -226,6 +268,7 @@ typedef struct cliStringLengthConfig_s {
 
 typedef union {
     cliLookupTableConfig_t lookup;            // used for MODE_LOOKUP excl. VAR_UINT32
+    cliIdentifierLookupConfig_t identifier;   // used for MODE_LOOKUP_IDENTIFIER
     cliMinMaxConfig_t minmax;                 // used for MODE_DIRECT with signed parameters
     cliMinMaxUnsignedConfig_t minmaxUnsigned; // used for MODE_DIRECT with unsigned parameters
     cliArrayLengthConfig_t array;             // used for MODE_ARRAY

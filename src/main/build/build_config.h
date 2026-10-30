@@ -38,8 +38,8 @@
 #define REQUIRE_PRINTF_LONG_SUPPORT
 #endif
 
-// MCU type IDs.
-// IDs are permanent as they have a dependency to configurator through MSP reporting
+// Legacy MSP MCU-type byte value: the configurator reads the MCU name from the CLI "env" command instead.
+#define MCU_TYPE_ID_PROVIDED_BY_NAME 254
 
 typedef enum {
     MCU_TYPE_SIMULATOR = 0,

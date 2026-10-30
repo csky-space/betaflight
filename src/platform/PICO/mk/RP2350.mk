@@ -23,6 +23,12 @@ PICO_MK_DIR = $(TARGET_PLATFORM_DIR)/mk
 
 ifneq ($(PICO_TRACE),)
 include $(PICO_MK_DIR)/PICO_trace.mk
+else
+# If not using trace, then we can avoid pulling in printf, which is referenced by the panic
+# and __assert_func functions (there's no point in those calling printf if we are not tracing).
+# When PICO_PANIC_FUNCTION is defined and empty, pico-sdk provides the simplest panic function.
+# The __assert_func function will be defined in system.c when PICO_TRACE macro is not defined.
+DEVICE_FLAGS += -DPICO_PANIC_FUNCTION=
 endif
 
 ifneq ($(TEST_PIO_DEBUG),)
@@ -46,7 +52,7 @@ ifeq ($(DEBUG_HARDFAULTS),PICO)
 CFLAGS          += -DDEBUG_HARDFAULTS
 endif
 
-SDK_DIR         = $(LIB_MAIN_DIR)/pico-sdk/src
+SDK_DIR         = $(LIB_MODULES_DIR)/pico-sdk/src
 
 #CMSIS
 CMSIS_DIR      := $(SDK_DIR)/rp2_common/cmsis/stub/CMSIS
@@ -106,7 +112,7 @@ PICO_LIB_SRC = \
             rp2_common/pico_stdlib/stdlib.c \
             rp2_common/pico_bit_ops/bit_ops_aeabi.S
 
-TINY_USB_SRC_DIR = $(LIB_MAIN_DIR)/pico-sdk/lib/tinyusb/src
+TINY_USB_SRC_DIR = $(LIB_MODULES_DIR)/pico-sdk/lib/tinyusb/src
 TINYUSB_SRC := \
             $(TINY_USB_SRC_DIR)/tusb.c \
             $(TINY_USB_SRC_DIR)/class/cdc/cdc_device.c \
@@ -370,7 +376,7 @@ SYS_INCLUDE_DIRS = \
             $(SDK_DIR)/$(TARGET_MCU_LIB_LOWER)/pico_platform/include \
             $(SDK_DIR)/$(TARGET_MCU_LIB_LOWER)/hardware_regs/include \
             $(SDK_DIR)/$(TARGET_MCU_LIB_LOWER)/hardware_structs/include \
-            $(LIB_MAIN_DIR)/pico-sdk/lib/tinyusb/src
+            $(LIB_MODULES_DIR)/pico-sdk/lib/tinyusb/src
 
 SYS_INCLUDE_DIRS += \
             $(SDK_DIR)/rp2350/boot_stage2/include
@@ -383,6 +389,11 @@ ARCH_FLAGS      += -DPICO_COPY_TO_RAM=$(RUN_FROM_RAM)
 # rather than inlining code that is sometimes broken.
 # (Calls to memcpy, memset become calls to performant wrapped versions.)
 ARCH_FLAGS      += -fno-builtin-memcpy -fno-builtin-memset
+
+# GCC canonicalises every header found via -isystem with a readlink per path
+# component; with the ~100 pico-sdk system include dirs that is ~23M syscalls a
+# build, which dominates the compile under a sandboxed runtime (gVisor).
+ARCH_FLAGS      += -fno-canonical-system-headers
 
 PICO_STDIO_USB_FLAGS = \
             -DLIB_PICO_PRINTF=1 \
@@ -423,7 +434,16 @@ PICO_MEM_WRAP_FNS = \
 
 PICO_MEM_LD_FLAGS = $(foreach fn, $(PICO_MEM_WRAP_FNS), -Wl,--wrap=$(fn))
 
-EXTRA_LD_FLAGS += $(PICO_STDIO_LD_FLAGS) $(PICO_TRACE_LD_FLAGS) $(PICO_FLOAT_LD_FLAGS) $(PICO_DOUBLE_LD_FLAGS) $(PICO_BIT_OPS_LD_FLAGS) $(PICO_MEM_LD_FLAGS)
+PICO_LIB_SRC += \
+            PICO/math_pico.S
+
+# Wrapped version of lrintf (nearest integer to float) for vcvtn instruction instead of slow library function
+PICO_MATH_WRAP_FNS = \
+            lrintf
+
+PICO_MATH_WRAP_FLAGS = $(foreach fn, $(PICO_MATH_WRAP_FNS), -Wl,--wrap=$(fn))
+
+EXTRA_LD_FLAGS += $(PICO_STDIO_LD_FLAGS) $(PICO_TRACE_LD_FLAGS) $(PICO_FLOAT_LD_FLAGS) $(PICO_DOUBLE_LD_FLAGS) $(PICO_BIT_OPS_LD_FLAGS) $(PICO_MEM_LD_FLAGS) $(PICO_MATH_WRAP_FLAGS)
 
 ifdef RP2350_TARGET
 
@@ -482,17 +502,26 @@ DEVICE_FLAGS    += \
             -DPICO_USE_BLOCKED_RAM=0 \
             -DPICO_CORE1_STACK_SIZE=0x1000
 
-# Set the size of flash in the primary linker file (LD_SCRIPT),
-# other linker files loaded via EXTRA_LD_FLAGS.
-# PICO_FLASH_MB may be set from board-specific config.mk
 
-# Default 4MB
-PICO_FLASH_MB ?= 4
+# LD_SCRIPT must be set to the first included linker script.
+# Set the sizes of flash and contents in LD_SCRIPT, other linker files loaded via EXTRA_LD_FLAGS.
 
-LD_SCRIPT       = $(LINKER_DIR)/pico_flash_$(PICO_FLASH_MB)MB.ld
+# Optional board-specific linker script for setting the size of the primary flash, and the allocation for fonts.
+CONFIG_FLASH_MEM_SCRIPT = $(CONFIG_PATH)/pico_flash_mem.ld
+
+# If pico_flash_mem.ld exists in the config folder, use that, otherwise load defaults from pico_flash_mem_defaults.ld
+ifneq ($(wildcard $(CONFIG_FLASH_MEM_SCRIPT)),)
+LD_SCRIPT += $(CONFIG_FLASH_MEM_SCRIPT)
+else
+LD_SCRIPT += $(LINKER_DIR)/pico_flash_mem_defaults.ld
+endif
 
 ifeq ($(RUN_FROM_RAM),1)
-EXTRA_LD_FLAGS  += -T$(LINKER_DIR)/pico_rp2350_RunFromRAM.ld
+# RunFromRAM -> loads everything into RAM, fastest, uses most RAM
+# EXTRA_LD_FLAGS  += -T$(LINKER_DIR)/pico_rp2350_RunFromRAM.ld
+
+# RunFromHybrid -> load most code / data into RAM, with some exclusions (cli, pg, ...)
+EXTRA_LD_FLAGS  += -T$(LINKER_DIR)/pico_rp2350_RunFromHybrid.ld
 else
 EXTRA_LD_FLAGS  += -T$(LINKER_DIR)/pico_rp2350_RunFromFLASH.ld
 endif
@@ -565,10 +594,19 @@ MCU_COMMON_SRC = \
             PICO/dshot_pico.c \
             PICO/exti_pico.c \
             PICO/io_pico.c \
+            PICO/osd/font_betaflight.c \
+            PICO/osd/fb_osd_pico.c \
+            PICO/osd/osd_element_ah.c \
+            PICO/osd/osd_element_altitude.c \
+            PICO/osd/osd_element_compassbar.c \
+            PICO/osd/osd_element_crosshairs.c \
+            PICO/osd/osd_elements_pico.c \
+            PICO/osd/osd_pico.c \
             PICO/persistent.c \
             PICO/pwm_motor_pico.c \
             PICO/pwm_servo_pico.c \
             PICO/pwm_beeper_pico.c \
+            PICO/gyro_clkin_pico.c \
             PICO/serial_usb_vcp_pico.c \
             PICO/system.c \
             PICO/uart/serial_uart_pico.c \
@@ -606,3 +644,11 @@ PICO_LIB_OBJS = $(addsuffix .o, $(basename $(PICO_LIB_SRC)))
 PICO_LIB_OBJS += $(addsuffix .o, $(basename $(PICO_TRACE_SRC)))
 PICO_LIB_TARGETS := $(foreach pobj, $(PICO_LIB_OBJS), %/$(pobj))
 $(PICO_LIB_TARGETS): CC_DEFAULT_OPTIMISATION := $(PICO_LIB_OPTIMISATION)
+
+# Linker script pico_rp2350_RunFromHybrid.ld modified to assign symbols from
+# certain files into flash instead of RAM (save memory without impacting performance), but
+# that can't work if build uses lto (link time optimisation has the effect of
+# breaking files up into temporary files)
+ifeq ($(RUN_FROM_RAM),1)
+LTO                   := no
+endif

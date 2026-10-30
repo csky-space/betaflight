@@ -21,6 +21,7 @@
 #pragma once
 
 #include "common/time.h"
+#include "common/maths.h"
 
 #include "pg/pg.h"
 #include "pg/rx.h"
@@ -34,8 +35,14 @@
 #define PWM_RANGE (PWM_RANGE_MAX - PWM_RANGE_MIN)
 #define PWM_RANGE_MIDDLE (PWM_RANGE_MIN + (PWM_RANGE / 2))
 
+#define NORMALISED_RANGE_MIN (-1.0f)
+#define NORMALISED_RANGE_MAX 1.0f
+#define NORMALISED_RANGE (NORMALISED_RANGE_MAX - NORMALISED_RANGE_MIN)
+
 #define PWM_PULSE_MIN   750       // minimum PWM pulse width which is considered valid
 #define PWM_PULSE_MAX   2250      // maximum PWM pulse width which is considered valid
+
+#define RX_MIN_CHECK_MAX (PWM_RANGE_MAX - 1) // throttle scaling divides by (PWM_RANGE_MAX - min_check)
 
 #define RXFAIL_STEP_TO_CHANNEL_VALUE(step) (PWM_PULSE_MIN + 25 * step)
 #define CHANNEL_VALUE_TO_RXFAIL_STEP(channelValue) ((constrain(channelValue, PWM_PULSE_MIN, PWM_PULSE_MAX) - PWM_PULSE_MIN) / 25)
@@ -84,7 +91,43 @@ typedef enum {
 
 extern const char rcChannelLetters[];
 
-extern float rcData[MAX_SUPPORTED_RC_CHANNEL_COUNT];       // interval [1000;2000]
+extern float rcData[MAX_SUPPORTED_RC_CHANNEL_COUNT];       // interval [-1;1], 1000..2000us
+
+static inline float rcUsToNorm(float us)
+{
+    return (us - PWM_RANGE_MIDDLE) * NORMALISED_RANGE / PWM_RANGE;
+}
+
+static inline float rcNormToUs(float norm)
+{
+    return norm * (PWM_RANGE / 2.0f) + PWM_RANGE_MIDDLE;
+}
+
+static inline float rcUsSpanToNorm(float us)
+{
+    return us * NORMALISED_RANGE / PWM_RANGE;
+}
+
+static inline float rcUsToThrottle(float us)
+{
+    return (us - PWM_RANGE_MIN) / PWM_RANGE;
+}
+
+static inline float rcUsSpanToThrottle(float us)
+{
+    return us / PWM_RANGE;
+}
+
+static inline float rcThrottleToUs(float throttle)
+{
+    return PWM_RANGE_MIN + throttle * PWM_RANGE;
+}
+
+// -1 at 1000us, 0 at 1500us, +1 at 2000us, not clamped
+static inline float rcGetChannel(int channel)
+{
+    return rcData[channel];
+}
 
 #define RSSI_SCALE_MIN 1
 #define RSSI_SCALE_MAX 255
@@ -147,6 +190,7 @@ typedef struct rxRuntimeState_s {
     uint16_t            *channelData;
     void                *frameData;
     timeUs_t            lastRcFrameTimeUs;
+    scaleRangef_t       scaleRange[NON_AUX_CHANNEL_COUNT];
 } rxRuntimeState_t;
 
 typedef enum {
@@ -174,6 +218,9 @@ extern linkQualitySource_e linkQualitySource;
 extern rxRuntimeState_t rxRuntimeState; //!!TODO remove this extern, only needed once for channelCount
 
 void rxInit(void);
+#if ENABLE_RX_UDP
+void rxUpdateUdpChannels(const uint16_t *channels, uint8_t channelCount);
+#endif
 void rxProcessPending(bool state);
 bool rxUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs);
 void rxFrameCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs);

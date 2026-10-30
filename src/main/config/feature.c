@@ -64,11 +64,14 @@ uint32_t featuresSupportedByBuild =
     | FEATURE_TELEMETRY
 #endif
     | FEATURE_3D // always available
-#ifdef USE_PWM
+#ifdef USE_RX_PWM
     | FEATURE_RX_PARALLEL_PWM
 #endif
 #ifdef USE_RX_MSP
     | FEATURE_RX_MSP
+#endif
+#if ENABLE_RX_UDP
+    | FEATURE_RX_UDP
 #endif
 #ifdef USE_ADC
     | FEATURE_RSSI_ADC

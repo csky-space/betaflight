@@ -43,6 +43,11 @@ typedef union vector3_u {
     };
 } vector3_t;
 
+// Earth-frame vectors use a plain vector3_t indexed by the axisNWU_e / axisENU_e
+// enums in common/axis.h, which name the frame, axis, and sign at each call site.
+// (The former vectorNED_t struct was removed: its .ef.N/.E/.D members claimed an
+// NED frame while rMat actually produces NWU, which caused a sign inversion.)
+
 typedef struct matrix33_s {
     float m[3][3];
 } matrix33_t;
@@ -58,6 +63,7 @@ float vector2NormSq(const vector2_t *v);
 float vector2Norm(const vector2_t *v);
 vector2_t *vector2Normalize(vector2_t *result, const vector2_t *v);
 vector2_t *vector2Rotate(vector2_t *result, const vector2_t *v, const float angle);
+float vector2Angle(const vector2_t *a, const vector2_t *b);
 
 bool vector3Equal(const vector3_t *a, const vector3_t *b);
 vector3_t *vector3Zero(vector3_t *v);

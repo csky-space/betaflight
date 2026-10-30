@@ -107,13 +107,14 @@ STATIC_UNIT_TESTED bmp280_calib_param_t bmp280_cal;
 int32_t bmp280_up = 0;
 int32_t bmp280_ut = 0;
 static DMA_DATA_ZERO_INIT uint8_t sensor_data[BMP280_DATA_FRAME_SIZE];
+STATIC_UNIT_TESTED bool bmp280SampleValid;
 
 static bool bmp280StartUT(baroDev_t *baro);
 static bool bmp280ReadUT(baroDev_t *baro);
 static bool bmp280GetUT(baroDev_t *baro);
 static bool bmp280StartUP(baroDev_t *baro);
-static bool bmp280ReadUP(baroDev_t *baro);
-static bool bmp280GetUP(baroDev_t *baro);
+STATIC_UNIT_TESTED bool bmp280ReadUP(baroDev_t *baro);
+STATIC_UNIT_TESTED bool bmp280GetUP(baroDev_t *baro);
 
 STATIC_UNIT_TESTED void bmp280Calculate(int32_t *pressure, int32_t *temperature);
 
@@ -159,7 +160,20 @@ bool bmp280Detect(baroDev_t *baro)
         defaultAddressApplied = true;
     }
 
-    busReadRegisterBuffer(dev, BMP280_CHIP_ID_REG, &bmp280_chip_id, 1);  /* read Chip Id */
+    bmp280_chip_id = 0;
+    bmp280SampleValid = false;
+    busReadRegisterBuffer(dev, BMP280_CHIP_ID_REG, &bmp280_chip_id, 1);
+
+    if ((bmp280_chip_id != BMP280_DEFAULT_CHIP_ID) && (bmp280_chip_id != BME280_DEFAULT_CHIP_ID)) {
+        // Some BMP280 modules wire SDO to VDD, putting the chip at 0x77.
+        // Retry on the alternate address before giving up so boards with
+        // either strap value are auto-detected from a single config.
+        if (defaultAddressApplied && dev->bus->busType == BUS_TYPE_I2C) {
+            dev->busType_u.i2c.address = 0x77;
+            bmp280_chip_id = 0;
+            busReadRegisterBuffer(dev, BMP280_CHIP_ID_REG, &bmp280_chip_id, 1);
+        }
+    }
 
     if ((bmp280_chip_id != BMP280_DEFAULT_CHIP_ID) && (bmp280_chip_id != BME280_DEFAULT_CHIP_ID)) {
         bmp280BusDeinit(dev);
@@ -222,24 +236,34 @@ static bool bmp280StartUP(baroDev_t *baro)
     return busWriteRegisterStart(&baro->dev, BMP280_CTRL_MEAS_REG, BMP280_MODE);
 }
 
-static bool bmp280ReadUP(baroDev_t *baro)
+STATIC_UNIT_TESTED bool bmp280ReadUP(baroDev_t *baro)
 {
     if (busBusy(&baro->dev, NULL)) {
         return false;
     }
 
     // read data from sensor
-    return busReadRegisterBufferStart(&baro->dev, BMP280_PRESSURE_MSB_REG, sensor_data, BMP280_DATA_FRAME_SIZE);
+    const bool started = busReadRegisterBufferStart(&baro->dev, BMP280_PRESSURE_MSB_REG, sensor_data, BMP280_DATA_FRAME_SIZE);
+    if (started) {
+        bmp280SampleValid = false;
+    }
+    return started;
 }
 
-static bool bmp280GetUP(baroDev_t *baro)
+STATIC_UNIT_TESTED bool bmp280GetUP(baroDev_t *baro)
 {
-    if (busBusy(&baro->dev, NULL)) {
+    bool error = false;
+    if (busBusy(&baro->dev, &error)) {
         return false;
+    }
+
+    if (error) {
+        return true;
     }
 
     bmp280_up = (int32_t)(sensor_data[0] << 12 | sensor_data[1] << 4 | sensor_data[2] >> 4);
     bmp280_ut = (int32_t)(sensor_data[3] << 12 | sensor_data[4] << 4 | sensor_data[5] >> 4);
+    bmp280SampleValid = true;
 
     return true;
 }
@@ -281,6 +305,13 @@ static uint32_t bmp280CompensatePressure(int32_t adc_P)
 
 STATIC_UNIT_TESTED void bmp280Calculate(int32_t *pressure, int32_t *temperature)
 {
+    if (!bmp280SampleValid) {
+        if (pressure) {
+            *pressure = 0;
+        }
+        return;
+    }
+
     // calculate
     int32_t t;
     uint32_t p;

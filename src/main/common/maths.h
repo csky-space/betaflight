@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <math.h>
 #include <stdint.h>
 
 #ifndef sq
@@ -71,11 +72,28 @@
 
 #define HZ_TO_INTERVAL(x) (1.0f / (x))
 #define HZ_TO_INTERVAL_US(x) (1000000 / (x))
+#define US_TO_INTERVAL(us) ((us) * 1e-6f)   // microseconds to seconds
+
+#define SCALE_FACTOR(in_start, in_end, out_start, out_end) \
+    ((float)((out_end) - (out_start)) / (float)((in_end) - (in_start)))
+
+#define SCALE_OFFSET(in_start, in_end, out_start, out_end) \
+    ((float)(out_start) - (SCALE_FACTOR((in_start), (in_end), (out_start), (out_end)) * (float)(in_start)))
+
+#define DEFINE_SCALE_FN(name, in_start, in_end, out_start, out_end)              \
+    static inline float name(float input) {                                      \
+        return (input * (SCALE_FACTOR(in_start, in_end, out_start, out_end)))    \
+                      + (SCALE_OFFSET(in_start, in_end, out_start, out_end));    \
+    }
+
+typedef struct scaleRangef_s {
+    float offset;
+    float scale;
+} scaleRangef_t;
 
 typedef int32_t fix12_t;
 
-typedef struct stdev_s
-{
+typedef struct stdev_s {
     float m_oldM, m_newM, m_oldS, m_newS;
     int m_n;
 } stdev_t;
@@ -105,6 +123,8 @@ float degreesToRadians(int16_t degrees);
 
 int scaleRange(int x, int srcFrom, int srcTo, int destFrom, int destTo);
 float scaleRangef(float x, float srcFrom, float srcTo, float destFrom, float destTo);
+void scaleRangefInit(scaleRangef_t *scale, float srcFrom, float srcTo, float destFrom, float destTo);
+float scaleRangefApply(scaleRangef_t *scale, float x);
 
 int32_t quickMedianFilter3(const int32_t * v);
 int32_t quickMedianFilter5(const int32_t * v);
@@ -170,4 +190,14 @@ static inline float constrainf(float amt, float low, float high)
         return high;
     else
         return amt;
+}
+
+// An angle in degrees brought into [-180, 180).
+static inline float wrapDeg180f(float deg)
+{
+    deg = fmodf(deg + 540.0f, 360.0f);
+    if (deg < 0.0f) {
+        deg += 360.0f;
+    }
+    return deg - 180.0f;
 }

@@ -44,14 +44,25 @@ extern const char * const osdTimerSourceNames[OSD_NUM_TIMER_TYPES];
 
 #define OSD_RCCHANNELS_COUNT 4
 
+#if OSD_FB_ENABLE_SMALLFONT
 #define OSD_CAMERA_FRAME_MIN_WIDTH  2
-#define OSD_CAMERA_FRAME_MAX_WIDTH  30    // Characters per row supportes by MAX7456
+#define OSD_CAMERA_FRAME_MAX_WIDTH  46    // Characters per row supported by PICO FB OSD
+#define OSD_CAMERA_FRAME_MIN_HEIGHT 2
+#define OSD_CAMERA_FRAME_MAX_HEIGHT 24    // Rows supported by PICO FB OSD (PAL)
+#else
+#define OSD_CAMERA_FRAME_MIN_WIDTH  2
+#define OSD_CAMERA_FRAME_MAX_WIDTH  30    // Characters per row supported by MAX7456
 #define OSD_CAMERA_FRAME_MIN_HEIGHT 2
 #define OSD_CAMERA_FRAME_MAX_HEIGHT 16    // Rows supported by MAX7456 (PAL)
+#endif
 
 #define OSD_FRAMERATE_MIN_HZ 1
+#ifndef OSD_FRAMERATE_MAX_HZ
 #define OSD_FRAMERATE_MAX_HZ 60
+#endif
+#ifndef OSD_FRAMERATE_DEFAULT_HZ
 #define OSD_FRAMERATE_DEFAULT_HZ 12
+#endif
 
 #define OSD_PROFILE_BITS_POS 11
 #define OSD_PROFILE_MASK    (((1 << OSD_PROFILE_COUNT) - 1) << OSD_PROFILE_BITS_POS)
@@ -88,6 +99,16 @@ extern const char * const osdTimerSourceNames[OSD_NUM_TIMER_TYPES];
 // Default HD OSD canvas size to be applied unless the goggles announce otherwise
 #define OSD_HD_COLS 53
 #define OSD_HD_ROWS 20
+
+#define OSD_CANVAS_COLS_MAX 63
+#define OSD_CANVAS_ROWS_MAX 31
+
+#define OSD_RSSI_ALARM_MAX 100
+#define OSD_LINK_QUALITY_ALARM_MAX 100
+#define OSD_CAP_ALARM_MAX 20000
+#define OSD_ALT_ALARM_MAX 10000
+#define OSD_STICK_OVERLAY_RADIO_MODE_MIN 1
+#define OSD_STICK_OVERLAY_RADIO_MODE_MAX 4
 
 // Timer configuration
 // Stored as 15[alarm:8][precision:4][source:4]0
@@ -197,8 +218,39 @@ typedef enum {
     OSD_LIDAR_DIST,
     OSD_CUSTOM_SERIAL_TEXT,
     OSD_BATTERY_PROFILE_NAME,
+
+#if defined(USE_GPS) && ENABLE_FLIGHT_PLAN
+    // Waypoint elements
+    OSD_WP_NUMBER,              // "WP 3/12" - current/total
+    OSD_WP_CURRENT_LAT,         // Current waypoint latitude
+    OSD_WP_CURRENT_LON,         // Current waypoint longitude
+    OSD_WP_CURRENT_ALT,         // Current waypoint altitude
+    OSD_WP_DISTANCE,            // Distance to current waypoint
+    OSD_WP_DIRECTION,           // Direction arrow to current waypoint
+    OSD_WP_NEXT_NUMBER,         // "NEXT 4" - next waypoint number
+    OSD_WP_ETA,                 // Estimated time to waypoint
+#endif
+
+#ifdef USE_OSD_NAV_MAP
+    OSD_NAV_MAP,                // minimap of home, flight plan and flown trail
+#endif
+
+#ifdef USE_POSITION_HOLD
+    OSD_POS_HOLD_READY,         // pre-engagement Position Hold readiness indicator
+#endif
+
+#ifdef USE_PITOT
+    OSD_AIRSPEED,
+#endif
+
     OSD_ITEM_COUNT // MUST BE LAST
 } osd_items_e;
+
+// Number of elements that existed as of MSP API 1.46 (Betaflight 4.5). MSP-query type OSD
+// consumers - the DJI V1 air unit / Caddx Vista render the OSD themselves from MSP_OSD_CONFIG -
+// stop accepting the reply once it grows beyond what 4.5 produced, so they are served a reply
+// truncated to this many elements. Never change this value; it describes a released wire format.
+#define OSD_ITEM_COUNT_API_1_46 80
 
 // *** IMPORTANT ***
 // Whenever new elements are added to 'osd_items_e', make sure to increment
@@ -283,7 +335,7 @@ typedef enum {
     OSD_WARNING_FAIL_SAFE,
     OSD_WARNING_LAUNCH_CONTROL,
     OSD_WARNING_GPS_RESCUE_UNAVAILABLE,
-    OSD_WARNING_GPS_RESCUE_DISABLED,
+    OSD_WARNING_GPS_RESCUE_FAILING,
     OSD_WARNING_RSSI,
     OSD_WARNING_LINK_QUALITY,
     OSD_WARNING_RSSI_DBM,
@@ -291,6 +343,7 @@ typedef enum {
     OSD_WARNING_RSNR,
     OSD_WARNING_LOAD,
     OSD_WARNING_POSHOLD_FAILED,
+    OSD_WARNING_AUTOPILOT_ABORT,
     OSD_WARNING_COUNT // MUST BE LAST
 } osdWarningsFlags_e;
 
@@ -300,6 +353,7 @@ typedef enum {
     OSD_DISPLAYPORT_DEVICE_MAX7456,
     OSD_DISPLAYPORT_DEVICE_MSP,
     OSD_DISPLAYPORT_DEVICE_FRSKYOSD,
+    OSD_DISPLAYPORT_DEVICE_FBOSD,
 } osdDisplayPortDevice_e;
 
 // Make sure the number of warnings do not exceed the available 32bit storage
@@ -309,14 +363,14 @@ STATIC_ASSERT(OSD_WARNING_COUNT <= 32, osdwarnings_overflow);
 #define ESC_TEMP_ALARM_OFF         0
 #define ESC_CURRENT_ALARM_OFF     -1
 
-#define OSD_GPS_RESCUE_DISABLED_WARNING_DURATION_US 3000000 // 3 seconds
+#define OSD_GPS_RESCUE_DISABLED_WARNING_DURATION_US 5000000 // 5 seconds
 
 extern const uint16_t osdTimerDefault[OSD_TIMER_COUNT];
 extern const osd_stats_e osdStatsDisplayOrder[OSD_STAT_COUNT];
 
 typedef struct osdConfig_s {
     // Alarms
-    uint16_t cap_alarm;
+    uint16_t cap_alarm;                     // Legacy fallback when the active battery profile has no capacity set
     uint16_t alt_alarm;
     uint8_t rssi_alarm;
 
@@ -365,6 +419,9 @@ typedef struct osdConfig_s {
     uint8_t osd_show_spec_prearm;
 #endif // USE_SPEC_PREARM_SCREEN
     displayPortSeverity_e arming_logo;        // font from which to display logo on arming
+    int8_t osd_uart;                          // serialPortIdentifier_e; SERIAL_PORT_NONE = unassigned. Bit chosen by displayPortDevice (FRSKYOSD=FUNCTION_FRSKY_OSD, else none).
+    int8_t osd_custom_text_uart;              // serialPortIdentifier_e; SERIAL_PORT_NONE = unassigned.  Always maps to FUNCTION_OSD_CUSTOM_TEXT when set.
+    uint8_t osd_custom_text_baud;             // baudRate_e index for osd_custom_text_uart
 } osdConfig_t;
 
 PG_DECLARE(osdConfig_t, osdConfig);
@@ -408,6 +465,7 @@ extern uint16_t osdAuxValue;
 void osdInit(displayPort_t *osdDisplayPort, osdDisplayPortDevice_e displayPortDevice);
 bool osdUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs);
 void osdUpdate(timeUs_t currentTimeUs);
+uint16_t osdGetCapacityAlarm(void);
 
 void osdStatSetState(uint8_t statIndex, bool enabled);
 bool osdStatGetState(uint8_t statIndex);
@@ -425,3 +483,4 @@ void osdSetVisualBeeperState(bool state);
 statistic_t *osdGetStats(void);
 bool osdNeedsAccelerometer(void);
 int osdPrintFloat(char *buffer, char leadingSymbol, float value, char *formatString, unsigned decimalPlaces, bool round, char trailingSymbol);
+bool osdIsBlink(osd_items_e item);

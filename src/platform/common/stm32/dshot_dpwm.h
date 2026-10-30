@@ -60,17 +60,19 @@ uint32_t getDshotHz(motorProtocolTypes_e pwmProtocolType);
 
 // For H7, DMA buffer is placed in a dedicated segment for coherency management
 // XXX Do we need any special qualifier for AT32?
-#if defined(STM32H7)
+#if defined(STM32H7) || defined(STM32N6) || defined(X32M7)
 #define DSHOT_DMA_BUFFER_ATTRIBUTE DMA_RAM
 #elif defined(STM32G4)
 #define DSHOT_DMA_BUFFER_ATTRIBUTE DMA_RAM_W
 #elif defined(STM32F7)
 #define DSHOT_DMA_BUFFER_ATTRIBUTE FAST_DATA_ZERO_INIT
+#elif defined(GD32H7)
+#define DSHOT_DMA_BUFFER_ATTRIBUTE DMA_RAM
 #else
 #define DSHOT_DMA_BUFFER_ATTRIBUTE /* Empty */
 #endif
 
-#if defined(STM32F4) || defined(STM32F7) || defined(STM32H7) || defined(STM32G4) || defined(STM32N6) || defined(AT32F435) || defined(APM32F4)
+#if defined(STM32F4) || defined(STM32F7) || defined(STM32H7) || defined(STM32H5) || defined(STM32C5) || defined(STM32G4) || defined(STM32N6) || defined(AT32F435) || defined(APM32F4) || defined(X32M7) || defined(GD32F4) || defined(GD32H7)
 #define DSHOT_DMA_BUFFER_UNIT uint32_t
 #else
 #define DSHOT_DMA_BUFFER_UNIT uint8_t
@@ -115,7 +117,7 @@ typedef struct motorDmaOutput_s {
     uint16_t timerDmaSource;
     uint8_t timerDmaIndex;
     bool configured;
-#if defined(STM32H7) || defined(STM32G4)
+#if defined(STM32H7) || defined(STM32H5) || defined(STM32C5) || defined(STM32G4)
     TIM_HandleTypeDef TimHandle;
     DMA_HandleTypeDef hdma_tim;
     IO_t io;

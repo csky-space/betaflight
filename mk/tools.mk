@@ -30,6 +30,9 @@ GCC_REQUIRED_VERSION ?= 13.3.1
 ifeq ($(OSFAMILY)-$(ARCHFAMILY), linux-x86_64)
   ARM_SDK_URL := https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi.tar.xz
   DL_CHECKSUM = 0601a9588bc5b9c99ad2b56133b7f118
+else ifeq ($(OSFAMILY)-$(ARCHFAMILY), linux-aarch64)
+  ARM_SDK_URL := https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-aarch64-arm-none-eabi.tar.xz
+  DL_CHECKSUM = 303102d97b877ebbeb36b3158994b218
 else ifeq ($(OSFAMILY)-$(ARCHFAMILY), macosx-x86_64)
   ARM_SDK_URL := https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-x86_64-arm-none-eabi.tar.xz
   DL_CHECKSUM = 4bb141e44b831635fde4e8139d470f1f
@@ -332,7 +335,7 @@ breakpad_clean:
 
 # Platform-specific tools
 # Each platform tools.mk appends to PLATFORM_SDKS and defines per-SDK properties:
-#   PLATFORM_SDK_<name>_SUBMODULE  - submodule path (e.g. lib/main/pico-sdk)
+#   PLATFORM_SDK_<name>_SUBMODULE  - submodule path (e.g. lib/modules/pico-sdk)
 #   PLATFORM_SDK_<name>_HYDRATE   - make target to hydrate the SDK
 #   PLATFORM_SDK_<name>_TOOLS     - make targets to install required toolchains and tools
 #
@@ -345,8 +348,7 @@ PLATFORM_SDK_arm_CC         := $(if $(ARM_SDK_PREFIX),$(ARM_SDK_PREFIX)gcc,arm-n
 PLATFORM_SDK_arm_CC_VERSION := $(GCC_REQUIRED_VERSION)
 PLATFORM_SDK_arm_CC_INSTALL := arm_sdk_install
 
-include $(PLATFORM_DIR)/STM32/mk/tools.mk
-include $(PLATFORM_DIR)/PICO/mk/tools.mk
+include $(wildcard $(PLATFORM_DIR)/*/mk/tools.mk)
 
 ## platform-sdk-list-print : list registered SDK names (space-separated)
 .PHONY: platform-sdk-list-print
@@ -364,10 +366,13 @@ else
 endif
 
 ## platform-sdk-cache-key-print : print cache key for SDK specified by SDK= variable
+# The path component is included so relocating a submodule (e.g. lib/main → lib/modules)
+# busts the cache; otherwise the gitlink SHA is unchanged across a path move and a stale
+# cache from the old path would be restored over the new one.
 .PHONY: platform-sdk-cache-key-print
 platform-sdk-cache-key-print:
 ifneq ($(PLATFORM_SDK_$(SDK)_SUBMODULE),)
-	@echo $(shell git rev-parse HEAD:$(PLATFORM_SDK_$(SDK)_SUBMODULE) 2>/dev/null)
+	@echo $(subst /,-,$(PLATFORM_SDK_$(SDK)_SUBMODULE))-$(shell git rev-parse HEAD:$(PLATFORM_SDK_$(SDK)_SUBMODULE) 2>/dev/null)
 else
 	@echo "base"
 endif

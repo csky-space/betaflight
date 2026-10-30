@@ -67,6 +67,13 @@
 */
 
 #define USE_PARAMETER_GROUPS
+
+// SPA06-003 shares the SPL07-003 register map; the DPS310 driver handles both.
+// Placed before the CLOUD_BUILD / USE_CONFIG gates so per-board configs that
+// opt in via USE_BARO_SPA06_003 alone still pull the DPS310 driver in.
+#if defined(USE_BARO_SPA06_003) && !defined(USE_BARO_DPS310)
+#define USE_BARO_DPS310
+#endif
 // type conversion warnings.
 // -Wconversion can be turned on to enable the process of eliminating these warnings
 //#pragma GCC diagnostic warning "-Wconversion"
@@ -109,17 +116,12 @@
 #define USE_BARO_BMP280
 #define USE_BARO_SPI_BMP280
 #define USE_BARO_BMP388
-#define USE_BARO_SPI_BMP388
 #define USE_BARO_SPI_LPS
 #define USE_BARO_QMP6988
-#define USE_BARO_SPI_QMP6988
 #define USE_BARO_DPS310
 #define USE_BARO_SPI_DPS310
-#define USE_BARO_BMP085
 #define USE_BARO_2SMBP_02B
-#define USE_BARO_SPI_2SMBP_02B
 #define USE_BARO_LPS22DF
-#define USE_BARO_SPI_LPS22DF
 #endif
 
 #if !defined(USE_GYRO) && !defined(USE_ACC)
@@ -144,6 +146,7 @@
 #define USE_GYRO_SPI_ICM42688P
 #define USE_ACCGYRO_ICM45686
 #define USE_ACCGYRO_ICM45605
+#define USE_ACCGYRO_ICM56686
 #define USE_ACCGYRO_IIM42652
 #define USE_ACCGYRO_IIM42653
 #define USE_ACC_SPI_ICM42605
@@ -154,6 +157,15 @@
 #define USE_ACC_MPU6050
 #define USE_GYRO_MPU6050
 #define USE_ACCGYRO_BMI160
+#define USE_ACCGYRO_BMI423
+#define USE_ACCGYRO_LSM6DSV32X
+#define USE_BARO_BMP085
+#define USE_BARO_SPI_BMP388
+#define USE_BARO_SPI_BMP580
+#define USE_BARO_SPI_BMP581
+#define USE_BARO_SPI_QMP6988
+#define USE_BARO_SPI_2SMBP_02B
+#define USE_BARO_SPI_LPS22DF
 #endif
 #endif // ACC GYRO inclusion
 
@@ -169,6 +181,7 @@
 #define USE_FLASHFS
 #define USE_FLASH_TOOLS
 #define USE_FLASH_M25P16
+#define USE_FLASH_FM25V02A  // 256-Kbit Cypress/Infineon SPI F-RAM
 #define USE_FLASH_W25N01G    // 1Gb NAND flash support
 #define USE_FLASH_W25N02K    // 2Gb NAND flash support
 #define USE_FLASH_W25M       // Stacked die support
@@ -194,9 +207,11 @@
 #define USE_RX_SX127X
 #endif // !USE_RX_SPI
 
+#if TARGET_FLASH_SIZE >= 1024
 #if !defined(USE_EXST) && !defined(USE_SDCARD)
 #define USE_SDCARD
 #endif
+#endif // TARGET_FLASH_SIZE >= 1024
 
 #endif // !defined(USE_CONFIG)
 
@@ -205,7 +220,7 @@
 
 #define USE_PINIO
 
-#if !defined(USE_SERIAL_RX)
+#if !defined(USE_SERIALRX)
 
 #define USE_SERIALRX
 #define USE_SERIALRX_CRSF       // Team Black Sheep Crossfire protocol
@@ -217,7 +232,7 @@
 #define USE_SERIALRX_XBUS       // JR
 #define USE_SERIALRX_SRXL2      // Spektrum SRXL2 protocol
 
-#endif // !defined(USE_SERIAL_RX)
+#endif // !defined(USE_SERIALRX)
 
 #if !defined(USE_TELEMETRY)
 #define USE_TELEMETRY
@@ -358,7 +373,13 @@
 #define USE_MSP_OVER_TELEMETRY
 
 #define USE_VIRTUAL_CURRENT_METER
+
+// DSHOT builds include ESC sensor support by default. Targets with another
+// telemetry transport may enable USE_ESC_SENSOR explicitly in target.h.
+#ifdef USE_DSHOT
 #define USE_ESC_SENSOR
+#endif
+
 #define USE_SERIAL_4WAY_BLHELI_BOOTLOADER
 #define USE_RCDEVICE
 
@@ -367,7 +388,6 @@
 #define USE_D_MAX
 
 #define USE_THROTTLE_BOOST
-#define USE_INTEGRATED_YAW_CONTROL
 
 #define USE_ITERM_RELAX
 #define USE_RC_SMOOTHING_FILTER
@@ -408,7 +428,6 @@
 #define USE_SENSOR_NAMES
 #define USE_UNCOMMON_MIXERS
 #define USE_SIGNATURE
-#define USE_ABSOLUTE_CONTROL
 #define USE_HOTT_TEXTMODE
 #define USE_ESC_SENSOR_TELEMETRY
 #define USE_TELEMETRY_SENSORS_DISABLED_DETAILS
@@ -431,11 +450,8 @@
 
 #endif // !defined(CORE_BUILD)
 
-#ifdef USE_GPS
-#define USE_GPS_NMEA
-#define USE_GPS_UBLOX
-#define USE_GPS_RESCUE
-#endif // USE_GPS
+// Note: USE_GPS secondary defines (USE_GPS_NMEA, USE_GPS_UBLOX, USE_GPS_RESCUE)
+// are in common_post.h because SITL defines USE_GPS in target.h (after common_pre.h).
 
 #if (defined(USE_OSD_HD) || defined(USE_OSD_SD) || defined(USE_FRSKYOSD)) && !defined(USE_OSD)
 // If either USE_OSD_SD for USE_OSD_HD are defined, ensure that USE_OSD is also defined
@@ -475,7 +491,7 @@
 #if defined(USE_SERIALRX_CRSF)
 
 #define USE_CRSF_V3
-#if defined(USE_TELEMETRY_CRSF) && defined(USE_CRSF_V3)
+#if defined(USE_TELEMETRY_CRSF)
 #define USE_CRSF_ACCGYRO_TELEMETRY
 #endif
 
@@ -526,15 +542,15 @@
 
 #undef USE_YAW_SPIN_RECOVERY
 #undef USE_LAUNCH_CONTROL
-#undef USE_ABSOLUTE_CONTROL
-#undef USE_INTEGRATED_YAW_CONTROL
 #undef USE_RUNAWAY_TAKEOFF
 
-#endif // USE_WING
-
-#if defined(USE_POSITION_HOLD) && !(defined(USE_GPS) || defined(USE_OPTICALFLOW))
-#error "USE_POSITION_HOLD requires USE_GPS and/or USE_OPTICALFLOW to be defined"
+// Distinct from the multirotor race-start USE_LAUNCH_CONTROL undef'd just
+// above: this is the hand/bungee launch assist for fixed wings.
+#ifndef USE_LAUNCH_WING
+#define USE_LAUNCH_WING
 #endif
+
+#endif // USE_WING
 
 // backwards compatibility for older config.h targets
 #ifndef GYRO_CONFIG_USE_GYRO_1

@@ -42,6 +42,13 @@
 #define PID_GAIN_MAX 250
 #define F_GAIN_MAX 1000
 
+#define ANGLE_LIMIT_MIN 10
+#define ANGLE_LIMIT_MAX 80
+#define ANGLE_P_GAIN_MAX 200
+#define HORIZON_LEVEL_STRENGTH_MAX 100
+#define HORIZON_LIMIT_STICKS_MIN 10
+#define HORIZON_LIMIT_STICKS_MAX 200
+
 // Scaling factors for Pids for better tunable range in configurator for betaflight pid controller. The scaling is based on legacy pid controller or previous float
 #define PTERM_SCALE 0.032029f
 #define ITERM_SCALE 0.244381f
@@ -60,6 +67,22 @@
 #define ANTIGRAVITY_KP 0.0034f; // one fifth of the I gain on P by default
 #define ITERM_ACCELERATOR_GAIN_OFF 0
 #define ITERM_ACCELERATOR_GAIN_MAX 250
+#define ITERM_RELAX_CUTOFF_MIN 1
+#define ITERM_RELAX_CUTOFF_MAX 50
+#define RATE_ACCEL_LIMIT_MAX 500
+#define THROTTLE_BOOST_MAX 100
+#define ACRO_TRAINER_ANGLE_LIMIT_MIN 10
+#define ACRO_TRAINER_ANGLE_LIMIT_MAX 80
+#define D_MAX_GAIN_MAX 100
+#define D_MAX_ADVANCE_MAX 200
+#define THRUST_LINEARIZATION_MAX 150
+#define VBAT_SAG_COMPENSATION_MAX 150
+#define DYN_IDLE_MIN_RPM_MAX 200
+#define FEEDFORWARD_TRANSITION_MAX 100
+#define FEEDFORWARD_SMOOTH_FACTOR_MAX 95
+#define FEEDFORWARD_JITTER_FACTOR_MAX 20
+#define FEEDFORWARD_BOOST_MAX 50
+#define FEEDFORWARD_MAX_RATE_LIMIT_MAX 200
 
 #define PID_ROLL_DEFAULT  { 45, 80, 30, 120, 0 }
 #define PID_PITCH_DEFAULT { 47, 84, 34, 125, 0 }
@@ -69,25 +92,25 @@
 #define DTERM_LPF1_DYN_MIN_HZ_DEFAULT 75
 #define DTERM_LPF1_DYN_MAX_HZ_DEFAULT 150
 #define DTERM_LPF2_HZ_DEFAULT 150
+#define DTERM_LPF1_DYN_EXPO_MAX 10
+#define YAW_LOWPASS_HZ_MAX 500
 
 #define TPA_MAX 100
-
-#ifdef USE_WING
+#define TPA_SPEED_PARAM_MIN 1
 #define ANGLE_PITCH_OFFSET_MAX 450
-#define S_TERM_SCALE 0.01f
-#define TPA_LOW_RATE_MIN INT8_MIN
-#define TPA_GRAVITY_MAX 5000
 #define TPA_CURVE_STALL_THROTTLE_MAX 100
-#else
-#define TPA_LOW_RATE_MIN 0
-#endif
-
-#ifdef USE_ADVANCED_TPA
 #define TPA_CURVE_PID_MAX 1000
 #define TPA_CURVE_EXPO_MIN -100
 #define TPA_CURVE_EXPO_MAX 100
 #define TPA_CURVE_PWL_SIZE 17
-#endif // USE_ADVANCED_TPA
+
+#ifdef USE_WING
+#define S_TERM_SCALE 0.01f
+#define TPA_LOW_RATE_MIN INT8_MIN
+#define TPA_GRAVITY_MAX 5000
+#else
+#define TPA_LOW_RATE_MIN 0
+#endif
 
 #define G_ACCELERATION 9.80665f // gravitational acceleration in m/s^2
 
@@ -175,6 +198,7 @@ typedef enum feedforwardAveraging_e {
 typedef enum tpaCurveType_e {
     TPA_CURVE_CLASSIC,
     TPA_CURVE_HYPERBOLIC,
+    TPA_CURVE_VREF,
 } tpaCurveType_t;
 
 typedef enum tpaSpeedType_e {
@@ -192,8 +216,8 @@ typedef enum {
 typedef struct pidProfile_s {
     uint16_t yaw_lowpass_hz;                // Additional yaw filter when yaw axis too noisy
     uint16_t dterm_lpf1_static_hz;          // Static Dterm lowpass 1 filter cutoff value in hz
-    uint16_t dterm_notch_hz;                // Biquad dterm notch hz
-    uint16_t dterm_notch_cutoff;            // Biquad dterm notch low cutoff
+    uint16_t dterm_notch_hz;                // SVF dterm notch hz
+    uint16_t dterm_notch_cutoff;            // SVF dterm notch low cutoff
 
     pidf_t  pid[PID_ITEM_COUNT];
 
@@ -232,10 +256,6 @@ typedef struct pidProfile_s {
     uint8_t acro_trainer_debug_axis;        // The axis for which record debugging values are captured 0=roll, 1=pitch
     uint8_t acro_trainer_gain;              // The strength of the limiting. Raising may reduce overshoot but also lead to oscillation around the angle limit
     uint16_t acro_trainer_lookahead_ms;     // The lookahead window in milliseconds used to reduce overshoot
-    uint8_t abs_control_gain;               // How strongly should the absolute accumulated error be corrected for
-    uint8_t abs_control_limit;              // Limit to the correction
-    uint8_t abs_control_error_limit;        // Limit to the accumulated error
-    uint8_t abs_control_cutoff;             // Cutoff frequency for path estimation in abs control
     uint8_t dterm_lpf2_type;                // Filter type for 2nd dterm lowpass
     uint16_t dterm_lpf1_dyn_min_hz;         // Dterm lowpass filter 1 min hz when in dynamic mode
     uint16_t dterm_lpf1_dyn_max_hz;         // Dterm lowpass filter 1 max hz when in dynamic mode
@@ -244,9 +264,7 @@ typedef struct pidProfile_s {
     uint8_t launchControlAngleLimit;        // Optional launch control angle limit (requires ACC)
     uint8_t launchControlGain;              // Iterm gain used while launch control is active
     uint8_t launchControlAllowTriggerReset; // Controls trigger behavior and whether the trigger can be reset
-    uint8_t use_integrated_yaw;             // Selects whether the yaw pidsum should integrated
-    uint8_t integrated_yaw_relax;           // Specifies how much integrated yaw should be reduced to offset the drag based yaw component
-    uint8_t thrustLinearization;            // Compensation factor for pid linearization
+    uint8_t thrustLinearization;            // Thrust curve compensation, ≈ ArduPilot MOT_THST_EXPO * 100 (0..150, default 0)
     uint8_t d_max[XYZ_AXIS_COUNT];          // Maximum D value on each axis
     uint8_t d_max_gain;                     // Gain factor for amount of gyro / setpoint activity required to boost D
     uint8_t d_max_advance;                  // Percentage multiplier for setpoint input to boost algorithm
@@ -322,6 +340,10 @@ typedef struct pidProfile_s {
     int16_t tpa_speed_pitch_offset;     // For wings: pitch offset in degrees*10 for craft speed estimation
     uint8_t yaw_type;                   // For wings: type of yaw (rudder or differential thrust)
     int16_t angle_pitch_offset;         // For wings: pitch offset for angle modes; in decidegrees; positive values tilting the wing down
+    uint8_t speed_curve_vref;           // For wings: Reference speed value which has optimal plane settins m/s
+    uint8_t speed_curve_power;          // For wings: Hyperbolic curves power *0.1
+    uint16_t speed_curve_min;           // For wings: Hyperbolic curves minimum *0.01
+    uint16_t speed_curve_max;           // For wings: Hyperbolic curves maximum *0.01
 
     uint8_t chirp_lag_freq_hz;              // leadlag1Filter cutoff/pole to shape the excitation signal
     uint8_t chirp_lead_freq_hz;             // leadlag1Filter cutoff/zero
@@ -331,6 +353,7 @@ typedef struct pidProfile_s {
     uint16_t chirp_frequency_start_deci_hz; // start frequency in units of 0.1 hz
     uint16_t chirp_frequency_end_deci_hz;   // end frequency in units of 0.1 hz
     uint8_t chirp_time_seconds;             // excitation time
+    uint8_t chirp_repeat;                   // number of repeats per axis
 } pidProfile_t;
 
 PG_DECLARE_ARRAY(pidProfile_t, PID_PROFILE_COUNT, pidProfiles);
@@ -359,7 +382,7 @@ typedef struct pidAxisData_s {
 
 typedef union dtermLowpass_u {
     pt1Filter_t pt1Filter;
-    biquadFilter_t biquadFilter;
+    svfLowpassFilter_t svfLowpassFilter;
     pt2Filter_t pt2Filter;
     pt3Filter_t pt3Filter;
 } dtermLowpass_t;
@@ -369,7 +392,7 @@ typedef struct pidCoefficient_s {
     float Ki;
     float Kd;
     float Kf;
-    float Kii;
+    float Ka;
 } pidCoefficient_t;
 
 typedef struct tpaSpeedParams_s {
@@ -380,6 +403,7 @@ typedef struct tpaSpeedParams_s {
     float speed;
     float maxVoltage;
     float pitchOffset;
+    float refSpeed;
 } tpaSpeedParams_t;
 
 typedef struct pidRuntime_s {
@@ -388,7 +412,7 @@ typedef struct pidRuntime_s {
     bool pidStabilisationEnabled;
     float previousPidSetpoint[XYZ_AXIS_COUNT];
     filterApplyFnPtr dtermNotchApplyFn;
-    biquadFilter_t dtermNotch[XYZ_AXIS_COUNT];
+    svfNotchFilter_t dtermNotch[XYZ_AXIS_COUNT];
     filterApplyFnPtr dtermLowpassApplyFn;
     dtermLowpass_t dtermLowpass[XYZ_AXIS_COUNT];
     filterApplyFnPtr dtermLowpass2ApplyFn;
@@ -443,15 +467,6 @@ typedef struct pidRuntime_s {
     uint8_t itermRelaxCutoff;
 #endif
 
-#ifdef USE_ABSOLUTE_CONTROL
-    float acCutoff;
-    float acGain;
-    float acLimit;
-    float acErrorLimit;
-    pt1Filter_t acLpf[XYZ_AXIS_COUNT];
-    float oldSetpointCorrection[XYZ_AXIS_COUNT];
-#endif
-
 #ifdef USE_D_MAX
     pt2Filter_t dMaxRange[XYZ_AXIS_COUNT];
     pt2Filter_t dMaxLowpass[XYZ_AXIS_COUNT];
@@ -483,14 +498,8 @@ typedef struct pidRuntime_s {
     float launchControlKi;
 #endif
 
-#ifdef USE_INTEGRATED_YAW_CONTROL
-    bool useIntegratedYaw;
-    uint8_t integratedYawRelax;
-#endif
-
 #ifdef USE_THRUST_LINEARIZATION
     float thrustLinearization;
-    float throttleCompensateAmount;
 #endif
 
 #ifdef USE_FEEDFORWARD
@@ -529,6 +538,10 @@ typedef struct pidRuntime_s {
     pwl_t tpaCurvePwl;
     float tpaCurvePwl_yValues[TPA_CURVE_PWL_SIZE];
     tpaCurveType_t tpaCurveType;
+#ifdef USE_WING
+    float refSpeedCurveArgMin;
+    float refSpeedCurveArgMax;
+#endif
 #endif // USE_ADVANCED_TPA
 
 #ifdef USE_CHIRP
@@ -540,6 +553,10 @@ typedef struct pidRuntime_s {
     float chirpFrequencyStartHz;
     float chirpFrequencyEndHz;
     float chirpTimeSeconds;
+    uint8_t chirpRepeat;
+    uint8_t chirpRepeatsRemaining;
+    flight_dynamics_index_t chirpAxis;
+    bool chirpSeriesIsFinished;
 #endif // USE_CHIRP
 } pidRuntime_t;
 
@@ -578,7 +595,6 @@ float pidCompensateThrustLinearization(float throttle);
 extern float axisError[XYZ_AXIS_COUNT];
 void applyItermRelax(const int axis, const float iterm,
     const float gyroRate, float *itermErrorRate, float *currentPidSetpoint);
-void applyAbsoluteControl(const int axis, const float gyroRate, float *currentPidSetpoint, float *itermErrorRate);
 void rotateItermAndAxisError();
 float pidLevel(int axis, const pidProfile_t *pidProfile,
     const rollAndPitchTrims_t *angleTrim, float rawSetpoint, float horizonLevelStrength);
@@ -587,6 +603,11 @@ float calcHorizonLevelStrength(void);
 
 void dynLpfDTermUpdate(float throttle);
 void pidSetItermReset(bool enabled);
+#ifdef USE_WING
+void pidResetTpaSpeed(void);
+float pidGetWingTpaSpeed(void);
+float pidWingTpaSteadySpeed(float throttle);
+#endif
 float pidGetPreviousSetpoint(int axis);
 float pidGetDT(void);
 float pidGetPidFrequency(void);
@@ -594,4 +615,8 @@ float pidGetPidFrequency(void);
 float dynLpfCutoffFreq(float throttle, uint16_t dynLpfMin, uint16_t dynLpfMax, uint8_t expo);
 #ifdef USE_CHIRP
 bool  pidChirpIsFinished();
+flight_dynamics_index_t pidChirpGetChirpAxis(void);
+uint8_t pidChirpGetRepeatTotal(void);
+uint8_t pidChirpGetRepeatCurrent(void);
+bool pidChirpSeriesIsFinished(void);
 #endif

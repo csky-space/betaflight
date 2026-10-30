@@ -159,33 +159,64 @@ void uartPinConfigure_hw(const serialPinConfig_t *pSerialPinConfig)
     }
 }
 
+void uartSelectFunction_hw(uartPort_t *s, uint32_t gpio)
+{
+    uart_inst_t *uartInstance = UART_INST(s->USARTx);
+    gpio_set_function(gpio, UART_FUNCSEL_NUM(uartInstance, gpio)); // select GPIO_FUNC_UART or GPIO_FUNC_UART_AUX as appropriate.
+    UNUSED(uartInstance); // Current pico sdk funcsel macro ignores uartInstance, but that might change in future.
+}
+
+bool isTxComplete_hw(uartPort_t *s)
+{
+    uart_inst_t *uartInstance = UART_INST(s->USARTx);
+    uart_hw_t *uartHw = uart_get_hw(uartInstance);
+    uint32_t flags = uartHw->fr;
+
+    // Check nothing in FIFO, and uart has finished transmitting (not BUSY).
+    return (flags & UART_UARTFR_TXFE_BITS) != 0 && (flags & UART_UARTFR_BUSY_BITS) == 0;
+}
+
+static void sendBufferToUART(uartPort_t *s)
+{
+    uart_inst_t *uartInstance = UART_INST(s->USARTx);
+    uart_hw_t *uartHw = uart_get_hw(uartInstance);
+
+    // Fill the TX FIFO, then an interrupt will be generated when the FIFO empties beyond a threshold level.
+    while (uart_is_writable(uartInstance)) {
+        if (s->port.txBufferTail != s->port.txBufferHead) {
+            uartHw->dr = s->port.txBuffer[s->port.txBufferTail]; // as per uart_putc.
+            s->port.txBufferTail = (s->port.txBufferTail + 1) % s->port.txBufferSize;
+        } else {
+            // Done sending the buffer, clear the uart TX interrupt enable
+            hw_clear_bits(&(uartHw->imsc), UART_UARTIMSC_TXIM_BITS);
+            break;
+        }
+    }
+}
+
 static void uartIrqHandler_hw(uartPort_t *s)
 {
     uart_inst_t *uartInstance = UART_INST(s->USARTx);
-    if ((uart_get_hw(uartInstance)->imsc & (UART_UARTIMSC_RXIM_BITS | UART_UARTIMSC_RTIM_BITS)) != 0) {
+    uart_hw_t *uartHw = uart_get_hw(uartInstance);
+    uint32_t misr = uartHw->mis; // Masked interrupt status
+
+    // If the interrupt source was RX FIFO triggered / timeout and the RX interrupt is enabled, read from the FIFO until empty.
+    if ((misr & (UART_UARTIMSC_RXIM_BITS | UART_UARTIMSC_RTIM_BITS)) != 0 &&
+        (uartHw->imsc & (UART_UARTIMSC_RXIM_BITS | UART_UARTIMSC_RTIM_BITS)) != 0) {
         while (uart_is_readable(uartInstance)) {
-            const uint8_t ch = uart_getc(uartInstance);
+            const uint8_t ch = uartHw->dr; // as per uart_getc.
             if (s->port.rxCallback) {
                 s->port.rxCallback(ch, s->port.rxCallbackData);
             } else {
-                // bprintf("RX %x -> buffer",ch);
                 s->port.rxBuffer[s->port.rxBufferHead] = ch;
                 s->port.rxBufferHead = (s->port.rxBufferHead + 1) % s->port.rxBufferSize;
             }
         }
     }
 
-    if ((uart_get_hw(uartInstance)->imsc & UART_UARTIMSC_TXIM_BITS) != 0) {
-        while (uart_is_writable(uartInstance)) {
-            if (s->port.txBufferTail != s->port.txBufferHead) {
-                uart_putc(uartInstance, s->port.txBuffer[s->port.txBufferTail]);
-                s->port.txBufferTail = (s->port.txBufferTail + 1) % s->port.txBufferSize;
-            } else {
-                // Done sending the buffer, clear the uart TX interrupt enable
-                hw_clear_bits(&(uart_get_hw(uartInstance)->imsc), UART_UARTIMSC_TXIM_BITS);
-                break;
-            }
-        }
+    // If interrupt source was TX FIFO triggered and the TX interrupt is enabled, write to the FIFO until full.
+    if ((misr & UART_UARTIMSC_TXIM_BITS) != 0 && (uartHw->imsc & UART_UARTIMSC_TXIM_BITS) != 0) {
+        sendBufferToUART(s);
     }
 }
 
@@ -202,86 +233,116 @@ static void on_uart1(void)
 bool serialUART_hw(uartPort_t *s, uint32_t baudRate, portMode_e mode, portOptions_e options,
                    const uartHardware_t *hardware, serialPortIdentifier_e identifier, IO_t txIO, IO_t rxIO)
 {
-    UNUSED(options);
     UNUSED(mode);
 
     const int ownerIndex = serialOwnerIndex(identifier);
     const resourceOwner_e ownerTxRx = serialOwnerTxRx(identifier); // rx is always +1
+    uart_inst_t *uartInstance = UART_INST(hardware->reg);
+
+    if (options & SERIAL_BIDIR) {
+        // The PL011 (hardware uart) has no half duplex mode. Warn rather than fail, so that a
+        // protocol which still has some use without responses (e.g. SmartAudio) keeps working.
+        bprintf("Warning: single-wire option SERIAL_BIDIR on hardware UART only supports rx only or tx only unless joining pins with external hardware - alternatively use a PIOUART");
+    }
 
     if (txIO) {
         IOInit(txIO, ownerTxRx, ownerIndex);
         uint32_t txPin = IO_Pin(txIO);
         bprintf("gpio set function UART on tx pin %d", txPin);
-        gpio_set_function(txPin, GPIO_FUNC_UART);
+        gpio_set_function(txPin, UART_FUNCSEL_NUM(uartInstance, txPin)); // select GPIO_FUNC_UART or GPIO_FUNC_UART_AUX as appropriate.
+        gpio_set_pulls(txPin, false, false); // No pull up, no pull down
     }
 
     if (rxIO) {
         IOInit(rxIO, ownerTxRx + 1, ownerIndex);
         uint32_t rxPin = IO_Pin(rxIO);
-        gpio_set_function(rxPin, GPIO_FUNC_UART);
+        gpio_set_function(rxPin, UART_FUNCSEL_NUM(uartInstance, rxPin)); // select GPIO_FUNC_UART or GPIO_FUNC_UART_AUX as appropriate.
         bprintf("gpio set function UART on rx pin %d", rxPin);
-        gpio_set_pulls(rxPin, true, false); // Pull up
+        if (options & SERIAL_INVERTED) {
+            bprintf(" with pull down for RX on inverted uart");
+            gpio_set_pulls(rxPin, false, true); // Pull down
+        } else {
+            gpio_set_pulls(rxPin, true, false); // Pull up
+        }
     }
 
-    uart_inst_t *uartInstance = UART_INST(hardware->reg);
-    bprintf("serialUART uart init %p baudrate %d", uartInstance, baudRate);
+    const bool twoStop = options & SERIAL_STOPBITS_2;
+    const bool evenParity = options & SERIAL_PARITY_EVEN;
+
+    bprintf("serialUART uart init %p baudrate %d (options 0x%0x)", uartInstance, baudRate, options);
     uart_init(uartInstance, baudRate);
-
-    // TODO implement - use options here...
-    uart_set_hw_flow(uartInstance, false, false);
-    uart_set_format(uartInstance, 8, 1, UART_PARITY_NONE);
-
+    uart_set_format(uartInstance, 8, twoStop ? 2 : 1, evenParity ? UART_PARITY_EVEN : UART_PARITY_NONE);
     uart_set_fifo_enabled(uartInstance, true);
+    uart_set_hw_flow(uartInstance, false, false);
+
+    uartConfigureExternalPinInversion(s);
 
     bprintf("serialUART_hw: set exclusive handler and enable for irqn %d", hardware->irqn);
-
     irq_set_exclusive_handler(hardware->irqn, hardware->irqn == UART0_IRQ ? on_uart0 : on_uart1);
     irq_set_enabled(hardware->irqn, true);
-
-    // Don't enable any uart irq yet, wait until a call to uartReconfigure...
-    // (with the code as it currently is in serial_uart.c, this will prevent irq callback before rxCallback has been set)
-    // TODO review serial_uart.c uartOpen()
 
     s->port.rxBuffer = hardware->rxBuffer;
     s->port.txBuffer = hardware->txBuffer;
     s->port.rxBufferSize = hardware->rxBufferSize;
     s->port.txBufferSize = hardware->txBufferSize;
     s->USARTx = hardware->reg;
+
+    // Don't enable any uart irq yet, wait until a call to uartReconfigure...
+    // (with the code as it currently is in serial_uart.c, this will prevent irq callback before rxCallback has been set)
+    // TODO review serial_uart.c uartOpen()
+
     bprintf("====== setting USARTx to reg == %p", s->USARTx);
     return true;
 }
 
 void uartReconfigure_hw(uartPort_t *s)
 {
-    uart_inst_t *uartInstance = UART_INST(s->USARTx);
-    bprintf("uartReconfigure for port %p with USARTX %p", s, uartInstance);
-    int achievedBaudrate = uart_init(uartInstance, s->port.baudRate);
-#ifdef PICO_TRACE
-    bprintf("uartReconfigure h/w %p, requested baudRate %d, achieving %d", uartInstance, s->port.baudRate, achievedBaudrate);
-#else
-    UNUSED(achievedBaudrate);
-#endif
-    // TODO make further use of s->port.options
-    const bool twoStop = s->port.options & SERIAL_STOPBITS_2;
-    const bool evenParity = s->port.options & SERIAL_PARITY_EVEN;
-    uart_set_format(uartInstance, 8, twoStop ? 2 : 1, evenParity ? UART_PARITY_EVEN : UART_PARITY_NONE);
-    uart_set_fifo_enabled(uartInstance, true);
-    uartConfigureExternalPinInversion(s);
-    uart_set_hw_flow(uartInstance, false, false);
+    // Reconfigure is only called from uartOpen initially, and then from uartSetBaudRate and uartSetMode,
+    // so we only consider option changes to baud rate and mode here.
 
-// TODO would like to verify rx pin has been setup?
-//    if ((s->mode & MODE_RX) && rxIO) {
-    if (s->port.mode & MODE_RX) {
-        bprintf("serialUART setting RX irq");
+    uart_inst_t *uartInstance = UART_INST(s->USARTx);
+    uart_hw_t *uartHw = uart_get_hw(uartInstance);
+
+    // Temporarily disable any TX, RX interrupts
+    uart_set_irqs_enabled(uartInstance, false, false);
+
+    // Clear the UARTEN flag (on CR register), so that uart_set_baudrate doesn't insert a huge delay.
+    uint32_t cr_save = uartHw->cr;
+    uartHw->cr = 0;
+    int achievedBaudrate = uart_set_baudrate(uartInstance, s->port.baudRate);
+    uartHw->cr = cr_save;
+
+    uartDevice_t *uartDev = container_of(s, uartDevice_t, port);
+    IO_t rxIO = IOGetByTag(uartDev->rx.pin);
+    if (rxIO && (s->port.mode & MODE_RX)) {
         uart_set_irqs_enabled(uartInstance, true, false);
     }
 
-    bprintf("uartReconfigure note port.mode = 0x%x", s->port.mode);
+#if defined(PICO_TRACE_UART_EXTRA) && defined(PICO_TRACE)
+    // Can get very noisy, don't always want this, even when PICO_TRACE is defined.
+    bprintf("uartReconfigure for port %p with USARTX %p", s, uartInstance);
+    bprintf("uartReconfigure h/w %p, requested baudRate %d, achieving %d", uartInstance, s->port.baudRate, achievedBaudrate);
+    bprintf("uartReconfigure note options 0x%0x, port.mode = 0x%x", s->port.options, s->port.mode);
+    bprintf("uartReconfigure Actual LCR reg 0x%02x", uartHw->lcr_h);
+#else
+    UNUSED(achievedBaudrate);
+#endif
 }
 
 void uartEnableTxInterrupt_hw(uartPort_t *uartPort)
 {
-    uart_set_irqs_enabled(UART_INST(uartPort->USARTx), uartPort->port.mode & MODE_RX, true);
+    uart_inst_t *uartInstance = UART_INST(uartPort->USARTx);
+    uart_hw_t *uartHw = uart_get_hw(uartInstance);
+
+    // Temporarily disable TX interrupt mask to avoid irq handler calling sendBufferToUART at the same time.
+    hw_clear_bits(&(uartHw->imsc), UART_UARTIMSC_TXIM_BITS);
+
+    // Fill the TX FIFO. Any remainder is sent on interrupts generated when the FIFO fullness drops below a threshold level.
+    sendBufferToUART(uartPort);
+
+    // Enable "tx emptying" interrupts.
+    hw_set_bits(&(uartHw->imsc), UART_UARTIMSC_TXIM_BITS);
+    hw_write_masked(&(uartHw->ifls), 0, UART_UARTIFLS_TXIFLSEL_BITS); // threshold = 1/8 full as per uart_set_irqs_enabled in pico sdk.
 }
 
 #endif

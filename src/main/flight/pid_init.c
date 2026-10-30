@@ -38,7 +38,6 @@
 #include "fc/rc.h"
 
 #include "flight/pid.h"
-#include "flight/rpm_filter.h"
 
 #include "pg/motor.h"
 
@@ -114,6 +113,7 @@ static void tpaSpeedInit(const pidProfile_t *pidProfile)
     pidRuntime.tpaSpeed.speed = 0.0f;
     pidRuntime.tpaSpeed.maxVoltage = pidProfile->tpa_speed_max_voltage / 100.0f;
     pidRuntime.tpaSpeed.pitchOffset = pidProfile->tpa_speed_pitch_offset * M_PIf / 10.0f / 180.0f;
+    pidRuntime.tpaSpeed.refSpeed = pidProfile->speed_curve_vref;
 
     switch (pidProfile->tpa_speed_type) {
     case TPA_SPEED_BASIC:
@@ -141,7 +141,8 @@ void pidInitFilters(const pidProfile_t *pidProfile)
         return;
     }
 
-    const uint32_t pidFrequencyNyquist = pidRuntime.pidFrequency / 2; // No rounding needed
+    // limit to 95% of the nyquist to help with stability
+    const uint32_t pidFrequencyNyquist = (pidRuntime.pidFrequency / 2.0f) * 0.95f;
 
     uint16_t dTermNotchHz;
     if (pidProfile->dterm_notch_hz <= pidFrequencyNyquist) {
@@ -155,10 +156,10 @@ void pidInitFilters(const pidProfile_t *pidProfile)
     }
 
     if (dTermNotchHz != 0 && pidProfile->dterm_notch_cutoff != 0) {
-        pidRuntime.dtermNotchApplyFn = (filterApplyFnPtr)biquadFilterApply;
+        pidRuntime.dtermNotchApplyFn = (filterApplyFnPtr)svfNotchApply;
         const float notchQ = filterGetNotchQ(dTermNotchHz, pidProfile->dterm_notch_cutoff);
         for (int axis = FD_ROLL; axis <= FD_YAW; axis++) {
-            biquadFilterInit(&pidRuntime.dtermNotch[axis], dTermNotchHz, targetPidLooptime, notchQ, FILTER_NOTCH, 1.0f);
+            svfNotchInit(&pidRuntime.dtermNotch[axis], dTermNotchHz, pidRuntime.dT, notchQ);
         }
     } else {
         pidRuntime.dtermNotchApplyFn = nullFilterApply;
@@ -181,15 +182,11 @@ void pidInitFilters(const pidProfile_t *pidProfile)
                 pt1FilterInit(&pidRuntime.dtermLowpass[axis].pt1Filter, pt1FilterGain(dterm_lpf1_init_hz, pidRuntime.dT));
             }
             break;
-        case FILTER_BIQUAD:
-            if (pidProfile->dterm_lpf1_static_hz < pidFrequencyNyquist) {
-#ifdef USE_DYN_LPF
-                pidRuntime.dtermLowpassApplyFn = (filterApplyFnPtr)biquadFilterApplyDF1;
-#else
-                pidRuntime.dtermLowpassApplyFn = (filterApplyFnPtr)biquadFilterApply;
-#endif
+        case FILTER_SVF:
+            if (dterm_lpf1_init_hz < pidFrequencyNyquist) {
+                pidRuntime.dtermLowpassApplyFn = (filterApplyFnPtr)svfLowpassFilterApply;
                 for (int axis = FD_ROLL; axis <= FD_YAW; axis++) {
-                    biquadFilterInitLPF(&pidRuntime.dtermLowpass[axis].biquadFilter, dterm_lpf1_init_hz, targetPidLooptime);
+                    svfLowpassFilterInit(&pidRuntime.dtermLowpass[axis].svfLowpassFilter, dterm_lpf1_init_hz, pidRuntime.dT);
                 }
             } else {
                 pidRuntime.dtermLowpassApplyFn = nullFilterApply;
@@ -224,14 +221,14 @@ void pidInitFilters(const pidProfile_t *pidProfile)
                 pt1FilterInit(&pidRuntime.dtermLowpass2[axis].pt1Filter, pt1FilterGain(pidProfile->dterm_lpf2_static_hz, pidRuntime.dT));
             }
             break;
-        case FILTER_BIQUAD:
+        case FILTER_SVF:
             if (pidProfile->dterm_lpf2_static_hz < pidFrequencyNyquist) {
-                pidRuntime.dtermLowpass2ApplyFn = (filterApplyFnPtr)biquadFilterApply;
+                pidRuntime.dtermLowpass2ApplyFn = (filterApplyFnPtr)svfLowpassFilterApply;
                 for (int axis = FD_ROLL; axis <= FD_YAW; axis++) {
-                    biquadFilterInitLPF(&pidRuntime.dtermLowpass2[axis].biquadFilter, pidProfile->dterm_lpf2_static_hz, targetPidLooptime);
+                    svfLowpassFilterInit(&pidRuntime.dtermLowpass2[axis].svfLowpassFilter, pidProfile->dterm_lpf2_static_hz, pidRuntime.dT);
                 }
             } else {
-                pidRuntime.dtermLowpassApplyFn = nullFilterApply;
+                pidRuntime.dtermLowpass2ApplyFn = nullFilterApply;
             }
             break;
         case FILTER_PT2:
@@ -269,14 +266,6 @@ void pidInitFilters(const pidProfile_t *pidProfile)
     if (pidRuntime.itermRelax) {
         for (int i = 0; i < XYZ_AXIS_COUNT; i++) {
             pt1FilterInit(&pidRuntime.windupLpf[i], pt1FilterGain(pidRuntime.itermRelaxCutoff, pidRuntime.dT));
-        }
-    }
-#endif
-
-#if defined(USE_ABSOLUTE_CONTROL)
-    if (pidRuntime.itermRelax) {
-        for (int i = 0; i < XYZ_AXIS_COUNT; i++) {
-            pt1FilterInit(&pidRuntime.acLpf[i], pt1FilterGain(pidRuntime.acCutoff, pidRuntime.dT));
         }
     }
 #endif
@@ -355,6 +344,32 @@ static void tpaCurveHyperbolicInit(const pidProfile_t *pidProfile)
     pwlFill(&pidRuntime.tpaCurvePwl, tpaCurveHyperbolicFunction, (void*)pidProfile);
 }
 
+#ifdef USE_WING
+static float tpaCurveHyperbolicVrefFunction(float x, void *args)
+{
+    const pidProfile_t *pidProfile = (const pidProfile_t*)args;
+    const float power = pidProfile->speed_curve_power * 0.1f;
+    return powf(1.0f / x, power);
+}
+
+static void tpaCurveHyperbolicVrefInit(const pidProfile_t *pidProfile)
+{
+    const float power = pidProfile->speed_curve_power * 0.1f;
+    const float yMin = pidProfile->speed_curve_min * 0.01f;
+    const float yMax = pidProfile->speed_curve_max * 0.01f;
+    const float maxSpeed = constrainf(pidRuntime.tpaSpeed.maxSpeed, pidRuntime.tpaSpeed.refSpeed, 85.0f);
+
+    const float xMin = powf(yMax, -1.0f / power);
+    const float xMax = MIN(powf(yMin, -1.0f / power),
+                           maxSpeed / pidRuntime.tpaSpeed.refSpeed);
+
+    pidRuntime.refSpeedCurveArgMin = xMin;
+    pidRuntime.refSpeedCurveArgMax = xMax;
+    pwlInitialize(&pidRuntime.tpaCurvePwl, pidRuntime.tpaCurvePwl_yValues, TPA_CURVE_PWL_SIZE, xMin, xMax);
+    pwlFill(&pidRuntime.tpaCurvePwl, tpaCurveHyperbolicVrefFunction, (void*)pidProfile);
+}
+#endif
+
 static void tpaCurveInit(const pidProfile_t *pidProfile)
 {
         pidRuntime.tpaCurveType = pidProfile->tpa_curve_type;
@@ -362,6 +377,11 @@ static void tpaCurveInit(const pidProfile_t *pidProfile)
         case TPA_CURVE_HYPERBOLIC:
             tpaCurveHyperbolicInit(pidProfile);
             return;
+#ifdef USE_WING
+        case TPA_CURVE_VREF:
+            tpaCurveHyperbolicVrefInit(pidProfile);
+            return;
+#endif
         case TPA_CURVE_CLASSIC:
         default:
             return;
@@ -374,9 +394,6 @@ void pidInit(const pidProfile_t *pidProfile)
     pidSetTargetLooptime(gyro.targetLooptime); // Initialize pid looptime
     pidInitFilters(pidProfile);
     pidInitConfig(pidProfile);
-#ifdef USE_RPM_FILTER
-    rpmFilterInit(rpmFilterConfig(), gyro.targetLooptime);
-#endif
 #ifdef USE_ADVANCED_TPA
     tpaCurveInit(pidProfile);
 #endif
@@ -390,12 +407,7 @@ void pidInitConfig(const pidProfile_t *pidProfile)
         pidRuntime.pidCoefficient[axis].Kd = DTERM_SCALE * pidProfile->pid[axis].D;
         pidRuntime.pidCoefficient[axis].Kf = FEEDFORWARD_SCALE * (pidProfile->pid[axis].F * 0.01f);
     }
-#ifdef USE_INTEGRATED_YAW_CONTROL
-    if (!pidProfile->use_integrated_yaw)
-#endif
-    {
-        pidRuntime.pidCoefficient[FD_YAW].Ki *= 2.5f;
-    }
+    pidRuntime.pidCoefficient[FD_YAW].Ki *= 2.5f;
     pidRuntime.angleGain = pidProfile->pid[PID_LEVEL].P / 10.0f;
     pidRuntime.angleFeedforwardGain = pidProfile->pid[PID_LEVEL].F / 100.0f;
 #ifdef USE_ACC
@@ -421,6 +433,10 @@ void pidInitConfig(const pidProfile_t *pidProfile)
     pidRuntime.chirpFrequencyStartHz = pidProfile->chirp_frequency_start_deci_hz / 10.0f;
     pidRuntime.chirpFrequencyEndHz = pidProfile->chirp_frequency_end_deci_hz / 10.0f;
     pidRuntime.chirpTimeSeconds = pidProfile->chirp_time_seconds;
+    pidRuntime.chirpRepeat = pidProfile->chirp_repeat;
+    pidRuntime.chirpRepeatsRemaining = 0;
+    pidRuntime.chirpAxis = FD_ROLL;
+    pidRuntime.chirpSeriesIsFinished = false;
 #endif
 
     pidRuntime.maxVelocity[FD_ROLL] = pidRuntime.maxVelocity[FD_PITCH] = pidProfile->rateAccelLimit * 100 * pidRuntime.dT;
@@ -461,25 +477,14 @@ void pidInitConfig(const pidProfile_t *pidProfile)
     pidRuntime.acroTrainerGain = (float)pidProfile->acro_trainer_gain / 10.0f;
 #endif // USE_ACRO_TRAINER
 
-#if defined(USE_ABSOLUTE_CONTROL)
-    pidRuntime.acGain = (float)pidProfile->abs_control_gain;
-    pidRuntime.acLimit = (float)pidProfile->abs_control_limit;
-    pidRuntime.acErrorLimit = (float)pidProfile->abs_control_error_limit;
-    pidRuntime.acCutoff = (float)pidProfile->abs_control_cutoff;
-    for (int axis = FD_ROLL; axis <= FD_YAW; axis++) {
-        float iCorrection = -pidRuntime.acGain * PTERM_SCALE / ITERM_SCALE * pidRuntime.pidCoefficient[axis].Kp;
-        pidRuntime.pidCoefficient[axis].Ki = MAX(0.0f, pidRuntime.pidCoefficient[axis].Ki + iCorrection);
-    }
-#endif
-
 #ifdef USE_DYN_LPF
     if (pidProfile->dterm_lpf1_dyn_min_hz > 0) {
         switch (pidProfile->dterm_lpf1_type) {
         case FILTER_PT1:
             pidRuntime.dynLpfFilter = DYN_LPF_PT1;
             break;
-        case FILTER_BIQUAD:
-            pidRuntime.dynLpfFilter = DYN_LPF_BIQUAD;
+        case FILTER_SVF:
+            pidRuntime.dynLpfFilter = DYN_LPF_SVF;
             break;
         case FILTER_PT2:
             pidRuntime.dynLpfFilter = DYN_LPF_PT2;
@@ -509,14 +514,9 @@ void pidInitConfig(const pidProfile_t *pidProfile)
     pidRuntime.launchControlKi = ITERM_SCALE * pidProfile->launchControlGain;
 #endif
 
-#ifdef USE_INTEGRATED_YAW_CONTROL
-    pidRuntime.useIntegratedYaw = pidProfile->use_integrated_yaw;
-    pidRuntime.integratedYawRelax = pidProfile->integrated_yaw_relax;
-#endif
 
 #ifdef USE_THRUST_LINEARIZATION
     pidRuntime.thrustLinearization = pidProfile->thrustLinearization / 100.0f;
-    pidRuntime.throttleCompensateAmount = pidRuntime.thrustLinearization - 0.5f * sq(pidRuntime.thrustLinearization);
 #endif
 
 #ifdef USE_D_MAX
@@ -545,10 +545,10 @@ void pidInitConfig(const pidProfile_t *pidProfile)
     float feedforwardSmoothingTau = (rxDt * scaledSmoothFactor) / (1.0f - scaledSmoothFactor);
     pidRuntime.feedforwardSmoothFactor = feedforwardSmoothingTau;
     pidRuntime.feedforwardJitterFactor = pidProfile->feedforward_jitter_factor;
-    pidRuntime.feedforwardJitterFactorInv = 1.0f / (1.0f + pidProfile->feedforward_jitter_factor);
+    pidRuntime.feedforwardJitterFactorInv = 1.0f / rcUsSpanToNorm(1.0f + pidProfile->feedforward_jitter_factor);
     pidRuntime.feedforwardBoostFactor = 0.001f * pidProfile->feedforward_boost;
     pidRuntime.feedforwardMaxRateLimit = pidProfile->feedforward_max_rate_limit;
-    pidRuntime.feedforwardInterpolate = !(rxRuntimeState.serialrxProvider == SERIALRX_CRSF);
+    pidRuntime.feedforwardInterpolate = rxConfig()->serialrx_provider != SERIALRX_CRSF;
     pidRuntime.feedforwardYawHoldTime = 0.001f * pidProfile->feedforward_yaw_hold_time; // input time constant in milliseconds, converted to seconds
     pidRuntime.feedforwardYawHoldGain = pidProfile->feedforward_yaw_hold_gain;
     // normalise/maintain boost when time constant is small, 1.5x at 50ms, 2x at 25ms, almost 3x at 10ms

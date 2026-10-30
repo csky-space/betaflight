@@ -32,7 +32,7 @@ typedef struct uartPort_s {
     dmaResource_t *txDMAResource;
     uint32_t rxDMAChannel;
     uint32_t txDMAChannel;
-#if defined(USE_ATBSP_DRIVER)
+#if defined(USE_ATBSP_DRIVER) || defined(X32M7)
     uint32_t rxDMAMuxId;
     uint32_t txDMAMuxId;
 #endif
@@ -54,3 +54,4 @@ typedef struct uartPort_s {
 
 void uartPinConfigure(const serialPinConfig_t *pSerialPinConfig);
 serialPort_t *uartOpen(serialPortIdentifier_e identifier, serialReceiveCallbackPtr rxCallback, void *rxCallbackData, uint32_t baudRate, portMode_e mode, portOptions_e options);
+int uartDeviceIndexFromIdentifier(serialPortIdentifier_e identifier);

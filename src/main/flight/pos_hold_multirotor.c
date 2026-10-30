@@ -35,9 +35,17 @@
 #include "flight/position.h"
 #include "flight/position_estimator.h"
 #include "rx/rx.h"
+#include "scheduler/scheduler.h"
 
 #include "pg/pos_hold.h"
 #include "pos_hold.h"
+
+// TASK_POSHOLD is event driven off positionEstimatorUpdate(), so the control law
+// sees each new position estimate immediately rather than up to a task period
+// later. If the estimator is not running at all (TASK_POSITION disabled) this is
+// the interval after which the task falls back to periodic scheduling, so that
+// mode entry and exit are still serviced.
+#define POSHOLD_FALLBACK_PERIOD_US (2 * TASK_PERIOD_HZ(POSHOLD_TASK_RATE_HZ))
 
 typedef struct posHoldState_s {
     bool isEnabled;
@@ -55,7 +63,7 @@ void posHoldInit(void)
 
 static void posHoldCheckSticks(void)
 {
-    if (failsafeIsActive()) {
+    if (failsafeIsActive() || FLIGHT_MODE(GPS_RESCUE_MODE)) {
         setSticksActiveStatus(false);
         return;
     }
@@ -63,16 +71,49 @@ static void posHoldCheckSticks(void)
     setSticksActiveStatus(sticksDeflected);
 }
 
-static bool sensorsOk(void)
+static bool sensorsOk(bool allowHeadingRecovery)
 {
-    // Source-agnostic: the estimator determines validity based on which
-    // sensors are available and the user's source settings.
-    return positionEstimatorIsValidXY();
+    if (!positionEstimatorIsValidXY()) {
+        DEBUG_SET(DEBUG_AUTOPILOT_HEADING, 6, 1);  //!< Position Hold Sensor Status
+        return false;
+    }
+
+    if (positionEstimatorIsHeadingRequired()) {
+        if (!imuIsHeadingValid() && !allowHeadingRecovery) {
+            DEBUG_SET(DEBUG_AUTOPILOT_HEADING, 6, 2);  //!< Position Hold Sensor Status
+            return false;
+        }
+    }
+
+    DEBUG_SET(DEBUG_AUTOPILOT_HEADING, 6, 0);  //!< Position Hold Sensor Status
+    return true;
+}
+bool posHoldUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs)
+{
+    UNUSED(currentTimeUs);
+
+    if (positionEstimatorTakeUpdate(POS_EST_CONSUMER_POSHOLD)) {
+        return true;
+    }
+
+    // No estimator running, so fall back to periodic scheduling
+    return currentDeltaTimeUs >= POSHOLD_FALLBACK_PERIOD_US;
 }
 
-void updatePosHold(timeUs_t currentTimeUs) {
+void updatePosHold(timeUs_t currentTimeUs)
+{
     UNUSED(currentTimeUs);
-    if (FLIGHT_MODE(POS_HOLD_MODE)) {
+
+    static bool gpsRescueWasActive = false;
+
+    const bool gpsRescueActive = FLIGHT_MODE(GPS_RESCUE_MODE);
+    const bool gpsRescueStarting = gpsRescueActive && !gpsRescueWasActive;
+
+    if (gpsRescueStarting && posHold.isEnabled) {
+        initPositionHold();
+    }
+
+    if (FLIGHT_MODE(POS_HOLD_MODE) || gpsRescueActive) {
         if (!posHold.isEnabled) {
             resetPositionControl(POSHOLD_TASK_RATE_HZ);
             posHold.isControlOk = true;
@@ -80,29 +121,54 @@ void updatePosHold(timeUs_t currentTimeUs) {
         }
     } else {
         if (posHold.isEnabled) {
-            for (unsigned i = 0; i < RP_AXIS_COUNT; i++) {
-                autopilotAngle[i] = 0.0f;
-            }
             setSticksActiveStatus(false);
+            // positionControl() stops being called from here, so the yaw controller
+            // can no longer stand itself down; do it for it.
+            autopilotDisableYawControl();
         }
         posHold.isEnabled = false;
     }
+    gpsRescueWasActive = gpsRescueActive;
 
-    if (posHold.isEnabled && posHold.isControlOk) {
+    if (posHold.isEnabled) {
         posHoldCheckSticks();
-        posHold.areSensorsOk = sensorsOk();
+        const bool sensorsWereOk = posHold.areSensorsOk;
+        posHold.areSensorsOk = sensorsOk(isHeadingRecoveryActive());
         if (posHold.areSensorsOk) {
+            if (!sensorsWereOk) {
+                // Sensors came back after a dropout: the craft drifted while
+                // blind, so resuming against the pre-dropout target would
+                // lurch toward it — or trip the sanity fence on the spot.
+                // Re-anchor the hold at the current position instead.
+                positionControlReanchor();
+            }
             posHold.isControlOk = positionControl();
         } else {
+            // 333 traps the sensors-not-OK path
+            DEBUG_SET(DEBUG_AUTOPILOT_PID, 7, 333);  //!< Status Flags
             for (unsigned i = 0; i < RP_AXIS_COUNT; i++) {
                 autopilotAngle[i] = 0.0f;
             }
+            // positionControl() is skipped, so the yaw controller cannot stand itself
+            // down; leaving it active would keep injecting the last rate.
+            autopilotDisableYawControl();
         }
     }
 }
 
+bool isAutopilotInControl(void)
+{
+    return posHold.isEnabled && posHold.isControlOk && posHold.areSensorsOk;
+}
+
 bool posHoldFailure(void) {
     return FLIGHT_MODE(POS_HOLD_MODE) && (!posHold.isControlOk || !posHold.areSensorsOk);
+}
+
+// Pre-engagement readiness: the entry conditions alone, without the
+// control-failure checks in posHoldFailure() that only apply once engaged.
+bool posHoldReady(void) {
+    return sensorsOk(false);
 }
 
 #endif // USE_POSITION_HOLD

@@ -31,6 +31,11 @@
 #define PERIOD_RXDATA_FAILURE        10     // millis
 #define PERIOD_RXDATA_RECOVERY       100    // millis
 
+#define FAILSAFE_DELAY_MIN (PERIOD_RXDATA_RECOVERY / MILLIS_PER_TENTH_SECOND)
+#define FAILSAFE_DELAY_MAX 200
+#define FAILSAFE_LANDING_TIME_MAX 250
+#define FAILSAFE_THROTTLE_LOW_DELAY_MAX 300
+
 typedef struct failsafeConfig_s {
     uint16_t failsafe_throttle;             // Throttle level used for landing - specify value between 1000..2000 (pwm pulse width for slightly below hover). center throttle = 1500.
     uint16_t failsafe_throttle_low_delay;   // Time throttle stick must have been below 'min_check' to "JustDisarm" instead of "full failsafe procedure".
@@ -51,7 +56,8 @@ typedef enum {
     FAILSAFE_LANDED,
     FAILSAFE_RX_LOSS_MONITORING,
     FAILSAFE_RX_LOSS_RECOVERED,
-    FAILSAFE_GPS_RESCUE
+    FAILSAFE_GPS_RESCUE,
+    FAILSAFE_AUTOPILOT      // continuing an autopilot mission under rx loss (ap_rx_loss_policy = CONTINUE)
 } failsafePhase_e;
 
 typedef enum {
@@ -91,6 +97,9 @@ typedef struct failsafeState_s {
     failsafePhase_e phase;
     failsafeRxLinkState_e rxLinkState;
     bool boxFailsafeSwitchWasOn;
+#if ENABLE_RESCUE_PLAN
+    uint32_t autopilotEngageDeadline;       // grace window for core.c to engage a staged rescue mission
+#endif
 } failsafeState_t;
 
 void failsafeInit(void);

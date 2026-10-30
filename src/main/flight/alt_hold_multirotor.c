@@ -33,24 +33,54 @@
 #include "flight/autopilot.h"
 #include "flight/failsafe.h"
 #include "flight/position.h"
+#include "flight/position_estimator.h"
+#include "flight/position_nav.h"
 
 #include "rx/rx.h"
 #include "pg/autopilot.h"
+#include "scheduler/scheduler.h"
 
 #include "alt_hold.h"
 
-static const float taskIntervalSeconds = HZ_TO_INTERVAL(ALTHOLD_TASK_RATE_HZ); // i.e. 0.01 s
+// TASK_ALTHOLD is event driven off positionEstimatorUpdate(), so it runs as soon
+// as a new altitude estimate exists rather than at an arbitrary phase relative to
+// it. If the estimator is not running at all (TASK_POSITION disabled) this is the
+// interval after which the task falls back to periodic scheduling, so that mode
+// entry and exit are still serviced.
+#define ALTHOLD_FALLBACK_PERIOD_US (2 * TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ))
 
 typedef struct {
     bool isActive;
     float targetAltitudeCm;
-    float maxVelocity;
+    float maxClimbRate;
     float targetVelocity;
     float deadband;
     bool allowStickAdjustment;
+    float emergencyDescentRateCmS;  // > 0 while an emergency descent has been commanded
 } altHoldState_t;
 
 altHoldState_t altHold;
+
+// The vertical rate alt hold works to when no nav leg is flying: the commanded emergency descent
+// rate if one is running, otherwise the configured climb rate.
+static float altHoldMaxClimbRate(void)
+{
+    return (altHold.emergencyDescentRateCmS > 0.0f) ? altHold.emergencyDescentRateCmS
+                                                    : altHold.maxClimbRate;
+}
+
+// The configured rate a climb or descent runs at when it does not state its own (cm/s).
+float altHoldGetClimbRateCmS(void)
+{
+    return altHoldConfig()->climbRate * 10.0f;
+}
+
+// Pushed by whoever owns the descent (an emergency rescue descent with no usable XY estimate).
+// Alt hold owns the throttle for it; the caller owns the rate and when it stops.
+void altHoldSetEmergencyDescent(bool active, float rateCmS)
+{
+    altHold.emergencyDescentRateCmS = active ? rateCmS : 0.0f;
+}
 
 static void altHoldReset(void)
 {
@@ -64,7 +94,7 @@ void altHoldInit(void)
     altHold.isActive = false;
     altHold.deadband = altHoldConfig()->deadband / 100.0f;
     altHold.allowStickAdjustment = altHoldConfig()->deadband;
-    altHold.maxVelocity = altHoldConfig()->climbRate * 10.0f; // 50 in CLI means 500cm/s
+    altHold.maxClimbRate = altHoldConfig()->climbRate * 10.0f; // 50 in CLI means 500cm/s
     altHoldReset();
 }
 
@@ -83,19 +113,9 @@ static void altHoldProcessTransitions(void) {
         }
         altHold.isActive = false;
     }
-
-    // ** the transition out of alt hold (exiting altHold) may be rough.  Some notes... **
-    // The original PR had a gradual transition from hold throttle to pilot control throttle
-    // using !(altHoldRequested && altHold.isActive) to run an exit function
-    // a cross-fade factor was sent to mixer.c based on time since the flight mode request was terminated
-    // it was removed primarily to simplify this PR
-
-    // hence in this PR's the user's throttle needs to be close to the hover throttle value on exiting altHold
-    // its not so bad because the 'target adjustment' by throttle requires that
-    // user throttle must be not more than half way out from hover for a stable hold
 }
 
-static void altHoldUpdateTargetAltitude(void)
+static void altHoldUpdateTargetAltitude(timeUs_t taskIntervalUs)
 {
     // User can adjust the target altitude with throttle, but only when
     // - throttle is outside deadband, and
@@ -106,19 +126,27 @@ static void altHoldUpdateTargetAltitude(void)
 
     if (altHold.allowStickAdjustment && calculateThrottleStatus() != THROTTLE_LOW) {
         const float rcThrottle = rcCommand[THROTTLE];
-        const float hoverPwm = (float)autopilotGetEffectiveHoverThrottlePwm();
-        const float lowThreshold = hoverPwm - altHold.deadband * (hoverPwm - PWM_RANGE_MIN);
-        const float highThreshold = hoverPwm + altHold.deadband * (PWM_RANGE_MAX - hoverPwm);
+        const float hoverThrottle = rcUsToThrottle(autopilotGetEffectiveHoverThrottlePwm());
+        const float lowThreshold = hoverThrottle - altHold.deadband * hoverThrottle;
+        const float highThreshold = hoverThrottle + altHold.deadband * (1.0f - hoverThrottle);
 
         if (rcThrottle < lowThreshold) {
-            stickFactor = scaleRangef(rcThrottle, PWM_RANGE_MIN, lowThreshold, -1.0f, 0.0f);
+            stickFactor = scaleRangef(rcThrottle, 0.0f, lowThreshold, -1.0f, 0.0f);
         } else if (rcThrottle > highThreshold) {
-            stickFactor = scaleRangef(rcThrottle, highThreshold, PWM_RANGE_MAX, 0.0f, 1.0f);
+            stickFactor = scaleRangef(rcThrottle, highThreshold, 1.0f, 0.0f, 1.0f);
         }
     }
-
-    // if failsafe is active, and we get here, we are in failsafe landing mode, it controls throttle
-    if (failsafeIsActive()) {
+    // StickFactor is a multiplier for maxClimbRate, based on throttle position, that sets the ascend or descend velocity
+    // is zero at zero throttle and within the deadband, meaning no requested change in altitude
+    // below the lower deadband limit, it is negative, changing from 0 to -1, or full descend speed, reached just above zero throttle
+    // conversely, as throttle moves above the upper deadband limit, StickFactor increased from 0 to 1 at full throttle
+    // when throttle is moved quickly upwards from being fully down, it passes through the maximum descent rate range, leading to a negative glitch.
+    // a similar downgoing glitch occurs when exiting upwards from zero throttle
+    // these glitches are minimised  when these transitions are quick
+            
+    // if failsafe is active, and we get here, we are in failsafe landing mode, it controls throttle.
+    // a commanded emergency descent (a rescue that cannot stage or has aborted) drives the same descent.
+    if (failsafeIsActive() || altHold.emergencyDescentRateCmS > 0.0f) {
         // descend at up to 10 times faster when high
         // default landing timeout is now 60s; must to get the quad down within this limit
         // need a rapid descent when initiated high, and must slow down closer to ground
@@ -127,25 +155,56 @@ static void altHoldUpdateTargetAltitude(void)
         // constant (set) deceleration target in the last 2m
         stickFactor = -(0.9f + constrainf(getAltitudeCmControl() / 2000.0f, 0.1f, 9.0f));
     }
-    altHold.targetVelocity = stickFactor * altHold.maxVelocity;
 
-    // prevent stick input from moving target altitude too far away from current altitude
-    // otherwise it can be difficult to bring target altitude close to current altitude in a reasonable time
-    // using maxVelocity means the stick can bring altitude target to current within 1s
+    const float maxClimbRate = altHoldMaxClimbRate();
+    altHold.targetVelocity = stickFactor * maxClimbRate;
+    // prevent pilot altitude adjustments from moving the target altitude so far away from current altitude
+    // that it might be difficult to get back to a similar target altitude in a reasonable time.
+    // the altitude target cannot be moved to a location that cannot be reached in 1s at maxClimbRate
     // this constrains the P and I response to user target changes, but not D of F responses
-    // Range is compared to distance that might be traveled in one second
-    if (fabsf(getAltitudeCmControl() - altHold.targetAltitudeCm) < altHold.maxVelocity * 1.0f /* s */) {
-        altHold.targetAltitudeCm += altHold.targetVelocity * taskIntervalSeconds;
+    if (fabsf(getAltitudeCmControl() - altHold.targetAltitudeCm) < maxClimbRate * 1.0f /* s */) {
+        altHold.targetAltitudeCm += altHold.targetVelocity * US_TO_INTERVAL(taskIntervalUs);
     }
 }
 
-static void altHoldUpdate(void)
+static void altHoldUpdate(timeUs_t taskIntervalUs)
 {
-    // check if the user has changed the target altitude using sticks
+
     if (altHoldConfig()->climbRate) {
-        altHoldUpdateTargetAltitude();
+        altHoldUpdateTargetAltitude(taskIntervalUs); // check if the pilot has changed the target altitude using sticks
     }
-    altitudeControl(altHold.targetAltitudeCm, taskIntervalSeconds, altHold.targetVelocity, altHold.maxVelocity);
+
+    float targetAltitudeCm = altHold.targetAltitudeCm;
+    float targetAltitudeVelocity = altHold.targetVelocity;
+    float velLimitCmS = altHoldMaxClimbRate();
+
+    // A nav leg owns the vertical channel while one is flying. It states the altitude it is
+    // commanding right now (already ramped at the leg's rate), the rate that goes with it, and the
+    // cap on that rate. Nothing here re-derives any of it, or asks what the leg is for.
+    if (positionNavHasActiveTarget()) {
+        const positionNavCommand_t *navCmd = positionNavGetActiveCommand();
+        if (navCmd->includeAltitude) {
+            targetAltitudeCm = positionNavGetTargetAltitudeCm();
+            targetAltitudeVelocity = positionNavGetTargetVelocityCmS().z;
+            velLimitCmS = positionNavGetVerticalRateLimitCmS();
+            // track it, so alt hold does not revert to a pre-nav target altitude when the leg ends
+            altHold.targetAltitudeCm = targetAltitudeCm;
+        }
+    }
+
+    altitudeControl(targetAltitudeCm, taskIntervalUs, targetAltitudeVelocity, velLimitCmS);
+}
+
+bool altHoldUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs)
+{
+    UNUSED(currentTimeUs);
+
+    if (positionEstimatorTakeUpdate(POS_EST_CONSUMER_ALTHOLD)) {
+        return true;
+    }
+
+    // No estimator running, so fall back to periodic scheduling
+    return currentDeltaTimeUs >= ALTHOLD_FALLBACK_PERIOD_US;
 }
 
 void updateAltHold(timeUs_t currentTimeUs) {
@@ -155,13 +214,14 @@ void updateAltHold(timeUs_t currentTimeUs) {
     altHoldProcessTransitions();
 
     if (altHold.isActive) {
-        altHoldUpdate();
+        // Event driven, so the interval between runs is the estimator's, not the nominal task period
+        altHoldUpdate(autopilotTaskIntervalUs(TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ)));
     }
 }
 
 bool isAltHoldActive(void) {
     return altHold.isActive;
 }
-#endif
 
+#endif // USE_ALTITUDE_HOLD
 #endif // !USE_WING

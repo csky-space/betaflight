@@ -20,9 +20,15 @@
 
 #pragma once
 
+#if OSD_FB_ENABLE_SMALLFONT
+#define VIDEO_COLUMNS_SD          OSD_SMALLFONT_COLS
+#define VIDEO_LINES_NTSC          OSD_SMALLFONT_ROWS_NTSC
+#define VIDEO_LINES_PAL           OSD_SMALLFONT_ROWS_PAL
+#else
 #define VIDEO_COLUMNS_SD          30
 #define VIDEO_LINES_NTSC          13
 #define VIDEO_LINES_PAL           16
+#endif
 
 typedef enum {
     DISPLAYPORT_DEVICE_TYPE_MAX7456 = 0,
@@ -32,6 +38,7 @@ typedef enum {
     DISPLAYPORT_DEVICE_TYPE_CRSF,
     DISPLAYPORT_DEVICE_TYPE_HOTT,
     DISPLAYPORT_DEVICE_TYPE_SRXL,
+    DISPLAYPORT_DEVICE_TYPE_FBOSD,
 } displayPortDeviceType_e;
 
 typedef enum {
@@ -102,8 +109,6 @@ typedef struct displayPort_s {
     void *device;
     uint8_t rows;
     uint8_t cols;
-    uint8_t posX;
-    uint8_t posY;
 
     // CMS state
     bool useFullscreen;
@@ -141,6 +146,12 @@ typedef struct displayPortVTable_s {
     void (*commitTransaction)(displayPort_t *displayPort);
     bool (*getCanvas)(struct displayCanvas_s *canvas, const displayPort_t *displayPort);
     void (*setBackgroundType)(displayPort_t *displayPort, displayPortBackground_e backgroundType);
+
+    // Allow display drivers to render OSD elements, e.g. pixel-based FBOSD (framebuffer) can cache information for AH and paint later.
+    bool (*drawOsdItem)(displayPort_t *displayPort, uint8_t elemPosX, uint8_t elemPosY, uint8_t /* osd_items_e */ item, bool isBackground);
+    void (*redrawBackground)(displayPort_t *displayPort);
+    void (*fontUpdateCompletion)(displayPort_t *displayPort);
+    bool (*writeLogo)(displayPort_t *displayPort, uint16_t fontOffset, uint16_t fontMax, uint8_t logoCols, uint8_t logoRows);
 } displayPortVTable_t;
 
 void displayGrab(displayPort_t *instance);
@@ -150,8 +161,8 @@ bool displayIsGrabbed(const displayPort_t *instance);
 void displayClearScreen(displayPort_t *instance, displayClearOption_e options);
 bool displayDrawScreen(displayPort_t *instance);
 int displayScreenSize(const displayPort_t *instance);
-void displaySetXY(displayPort_t *instance, uint8_t x, uint8_t y);
 int displaySys(displayPort_t *instance, uint8_t x, uint8_t y, displayPortSystemElement_e systemElement);
+bool displayExtended(displayPort_t *instance, uint8_t x, uint8_t y, uint8_t /* osd_items_e */ item, bool isBackground);
 int displayWrite(displayPort_t *instance, uint8_t x, uint8_t y, uint8_t attr, const char *text);
 int displayWriteChar(displayPort_t *instance, uint8_t x, uint8_t y, uint8_t attr, uint8_t c);
 bool displayIsTransferInProgress(const displayPort_t *instance);
@@ -160,6 +171,7 @@ void displayRedraw(displayPort_t *instance);
 bool displayIsSynced(const displayPort_t *instance);
 uint16_t displayTxBytesFree(const displayPort_t *instance);
 bool displayWriteFontCharacter(displayPort_t *instance, uint16_t addr, const struct osdCharacter_s *chr);
+void displayFontUpdateCompletion(displayPort_t *instance);
 bool displayCheckReady(displayPort_t *instance, bool rescan);
 void displayBeginTransaction(displayPort_t *instance, displayTransactionOption_e opts);
 void displayCommitTransaction(displayPort_t *instance);
@@ -170,3 +182,5 @@ bool displayLayerSelect(displayPort_t *instance, displayPortLayer_e layer);
 bool displayLayerCopy(displayPort_t *instance, displayPortLayer_e destLayer, displayPortLayer_e sourceLayer);
 void displaySetBackgroundType(displayPort_t *instance, displayPortBackground_e backgroundType);
 bool displaySupportsOsdSymbols(displayPort_t *instance);
+void displayRedrawBackground(displayPort_t *instance);
+bool displayWriteLogo(displayPort_t *instance, uint16_t fontOffset, uint16_t fontMax, uint8_t logoCols, uint8_t logoRows);

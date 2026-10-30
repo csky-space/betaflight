@@ -34,6 +34,8 @@
 #define PARAM_NAME_ACC_LPF_HZ "acc_lpf_hz"
 #define PARAM_NAME_MAG_HARDWARE "mag_hardware"
 #define PARAM_NAME_BARO_HARDWARE "baro_hardware"
+#define PARAM_NAME_BARO_DRIFT "baro_drift"
+#define PARAM_NAME_PITOT_HARDWARE "pitot_hardware"
 #define PARAM_NAME_RC_SMOOTHING "rc_smoothing"
 #define PARAM_NAME_RC_SMOOTHING_AUTO_FACTOR "rc_smoothing_auto_factor"
 #define PARAM_NAME_RC_SMOOTHING_AUTO_FACTOR_THROTTLE "rc_smoothing_auto_factor_throttle"
@@ -63,6 +65,10 @@
 #define PARAM_NAME_TPA_CURVE_PID_THR0 "tpa_curve_pid_thr0"
 #define PARAM_NAME_TPA_CURVE_PID_THR100 "tpa_curve_pid_thr100"
 #define PARAM_NAME_TPA_CURVE_EXPO "tpa_curve_expo"
+#define PARAM_NAME_SPEED_CURVE_VREF "speed_curve_vref"
+#define PARAM_NAME_SPEED_CURVE_POWER "speed_curve_power"
+#define PARAM_NAME_SPEED_CURVE_MIN "speed_curve_min"
+#define PARAM_NAME_SPEED_CURVE_MAX "speed_curve_max"
 #define PARAM_NAME_TPA_SPEED_TYPE "tpa_speed_type"
 #define PARAM_NAME_TPA_SPEED_BASIC_DELAY "tpa_speed_basic_delay"
 #define PARAM_NAME_TPA_SPEED_BASIC_GRAVITY "tpa_speed_basic_gravity"
@@ -117,8 +123,6 @@
 #define PARAM_NAME_THROTTLE_BOOST "throttle_boost"
 #define PARAM_NAME_THROTTLE_BOOST_CUTOFF "throttle_boost_cutoff"
 #define PARAM_NAME_THRUST_LINEARIZATION "thrust_linear"
-#define PARAM_NAME_ABS_CONTROL_GAIN "abs_control_gain"
-#define PARAM_NAME_USE_INTEGRATED_YAW "use_integrated_yaw"
 #define PARAM_NAME_D_MAX_GAIN "d_max_gain"
 #define PARAM_NAME_D_MAX_ADVANCE "d_max_advance"
 #define PARAM_NAME_MOTOR_OUTPUT_LIMIT "motor_output_limit"
@@ -161,6 +165,10 @@
 #define PARAM_NAME_ALTITUDE_LPF "altitude_lpf"
 #define PARAM_NAME_ALTITUDE_D_LPF "altitude_d_lpf"
 
+#define PARAM_NAME_OPTICALFLOW_HARDWARE "opticalflow_hardware"
+#define PARAM_NAME_OPTICALFLOW_ROTATION "opticalflow_rotation"
+#define PARAM_NAME_OPTICALFLOW_FLIP_X "opticalflow_flip_x"
+
 #define PARAM_NAME_AP_LANDING_ALTITUDE_M "ap_landing_altitude_m"
 #define PARAM_NAME_AP_HOVER_THROTTLE "ap_hover_throttle"
 #define PARAM_NAME_AP_THROTTLE_MIN "ap_throttle_min"
@@ -168,14 +176,107 @@
 #define PARAM_NAME_AP_ALTITUDE_P "ap_altitude_p"
 #define PARAM_NAME_AP_ALTITUDE_I "ap_altitude_i"
 #define PARAM_NAME_AP_ALTITUDE_D "ap_altitude_d"
+#define PARAM_NAME_AP_ALTITUDE_A "ap_altitude_a"
 #define PARAM_NAME_AP_ALTITUDE_F "ap_altitude_f"
 #define PARAM_NAME_AP_POSITION_P "ap_position_p"
 #define PARAM_NAME_AP_POSITION_I "ap_position_i"
-#define PARAM_NAME_AP_POSITION_II "ap_position_ii"
 #define PARAM_NAME_AP_POSITION_D "ap_position_d"
 #define PARAM_NAME_AP_POSITION_A "ap_position_a"
+#define PARAM_NAME_AP_POSITION_F "ap_position_f"
 #define PARAM_NAME_AP_POSITION_CUTOFF "ap_position_cutoff"
+#define PARAM_NAME_AP_STOP_THRESHOLD "ap_stop_threshold"
 #define PARAM_NAME_AP_MAX_ANGLE "ap_max_angle"
+
+// Velocity-based position control with drag compensation
+#define PARAM_NAME_AP_VELOCITY_DRAG_COEFF "ap_velocity_drag_coeff"
+#define PARAM_NAME_AP_MAX_VELOCITY "ap_max_velocity"
+
+// Phase 3: Waypoint navigation & yaw control
+#define PARAM_NAME_AP_WAYPOINT_ARRIVAL_RADIUS "ap_waypoint_arrival_radius"
+#define PARAM_NAME_AP_WAYPOINT_HOLD_RADIUS "ap_waypoint_hold_radius"
+#define PARAM_NAME_AP_STICK_DEADBAND "ap_stick_deadband"
+#define PARAM_NAME_AP_THROTTLE_DEADBAND "ap_throttle_deadband"
+#define PARAM_NAME_AP_YAW_MODE "ap_yaw_mode"
+#define PARAM_NAME_AP_YAW_P "ap_yaw_p"
+#define PARAM_NAME_AP_MAX_YAW_RATE "ap_max_yaw_rate"
+#define PARAM_NAME_AP_MIN_FORWARD_VELOCITY "ap_min_forward_velocity"
+
+#define PARAM_NAME_AP_WING_CRUISE_THROTTLE "ap_wing_cruise_throttle"
+#define PARAM_NAME_AP_WING_MIN_THROTTLE "ap_wing_min_throttle"
+#define PARAM_NAME_AP_WING_MAX_THROTTLE "ap_wing_max_throttle"
+#define PARAM_NAME_AP_WING_BANK_THROTTLE "ap_wing_bank_throttle"
+#define PARAM_NAME_AP_WING_MAX_CLIMB_ANGLE "ap_wing_max_climb_angle"
+#define PARAM_NAME_AP_WING_MAX_DIVE_ANGLE "ap_wing_max_dive_angle"
+#define PARAM_NAME_AP_WING_MAX_CLIMB_RATE "ap_wing_max_climb_rate"
+#define PARAM_NAME_AP_WING_MAX_SINK_RATE "ap_wing_max_sink_rate"
+#define PARAM_NAME_AP_WING_ALT_TIME_CONSTANT "ap_wing_alt_time_constant"
+#define PARAM_NAME_AP_WING_CLIMB_P "ap_wing_climb_p"
+#define PARAM_NAME_AP_WING_CLIMB_I "ap_wing_climb_i"
+#define PARAM_NAME_AP_WING_VERT_ACCEL "ap_wing_vert_accel"
+#define PARAM_NAME_AP_WING_CRUISE_SPEED "ap_wing_cruise_speed"
+#define PARAM_NAME_AP_WING_TURN_PITCH_FF "ap_wing_turn_pitch_ff"
+#define PARAM_NAME_AP_WING_TURN_YAW_FF "ap_wing_turn_yaw_ff"
+#define PARAM_NAME_AP_WING_MAX_BANK "ap_wing_max_bank"
+#define PARAM_NAME_AP_WING_L1_PERIOD "ap_wing_l1_period"
+#define PARAM_NAME_AP_WING_L1_DAMPING "ap_wing_l1_damping"
+#define PARAM_NAME_AP_WING_LOITER_RADIUS "ap_wing_loiter_radius"
+#define PARAM_NAME_AP_WING_LOITER_DIRECTION "ap_wing_loiter_direction"
+#define PARAM_NAME_AP_WING_LAND_HEADING "ap_wing_land_heading"
+#define PARAM_NAME_AP_WING_LAND_SIDE "ap_wing_land_side"
+#define PARAM_NAME_AP_WING_LAND_FINAL_LENGTH "ap_wing_land_final_length"
+#define PARAM_NAME_AP_WING_LAND_GLIDE_ANGLE "ap_wing_land_glide_angle"
+#define PARAM_NAME_AP_WING_LAND_APPROACH_ALT "ap_wing_land_approach_alt"
+#define PARAM_NAME_AP_WING_LAND_FLARE_HEIGHT "ap_wing_land_flare_height"
+#define PARAM_NAME_AP_WING_LAND_FLARE_PITCH "ap_wing_land_flare_pitch"
+#define PARAM_NAME_AP_WING_LAND_FLARE_SINK "ap_wing_land_flare_sink"
+#define PARAM_NAME_AP_WING_LAND_FINAL_BANK "ap_wing_land_final_bank"
+#define PARAM_NAME_AP_WING_LAND_SLOPE_TOLERANCE "ap_wing_land_slope_tolerance"
+#define PARAM_NAME_AP_WING_LAND_ATTEMPTS "ap_wing_land_attempts"
+#define PARAM_NAME_AP_WING_LAND_MAX_TAILWIND "ap_wing_land_max_tailwind"
+#define PARAM_NAME_AP_WING_LAND_LAUNCH_HEIGHT "ap_wing_land_launch_height"
+
+// Leg-line carrot path tracking and turn-angle cornering
+#define PARAM_NAME_AP_NAV_CORNER_SPEED "ap_nav_corner_speed"
+#define PARAM_NAME_AP_NAV_CORNER_DELTA_V "ap_nav_corner_delta_v"
+#define PARAM_NAME_AP_NAV_DECEL "ap_nav_decel"
+#define PARAM_NAME_AP_NAV_ACCEL "ap_nav_accel"
+#define PARAM_NAME_AP_NAV_CARROT_LEAD_TIME "ap_nav_carrot_lead_time"
+#define PARAM_NAME_AP_NAV_CARROT_LEAD_MAX "ap_nav_carrot_lead_max"
+#define PARAM_NAME_AP_NAV_PRETURN_DIST "ap_nav_preturn_dist"
+
+// Phase 5: Velocity buildup
+#define PARAM_NAME_AP_VELOCITY_BUILDUP_MAX_PITCH "ap_velocity_buildup_max_pitch"
+
+// Turn rate and holding patterns
+#define PARAM_NAME_AP_MAX_TURN_RATE "ap_max_turn_rate"
+#define PARAM_NAME_AP_HOLD_ORBIT_RADIUS "ap_hold_orbit_radius"
+#define PARAM_NAME_AP_HOLD_FIGURE8_WIDTH "ap_hold_figure8_width"
+
+// Landing sequence
+#define PARAM_NAME_AP_LANDING_DESCENT_RATE "ap_landing_descent_rate"
+#define PARAM_NAME_AP_LANDING_DETECTION_TIME "ap_landing_detection_time"
+#define PARAM_NAME_AP_LANDING_SPIRAL_ENABLE "ap_landing_spiral_enable"
+#define PARAM_NAME_AP_LANDING_SPIRAL_RADIUS "ap_landing_spiral_radius"
+#define PARAM_NAME_AP_LANDING_SPIRAL_RATE "ap_landing_spiral_rate"
+#define PARAM_NAME_AP_LANDING_VELOCITY_THRESHOLD "ap_landing_velocity_threshold"
+#define PARAM_NAME_AP_LANDING_THROTTLE_THRESHOLD "ap_landing_throttle_threshold"
+#define PARAM_NAME_AP_MIN_NAV_ALTITUDE_M "ap_min_nav_altitude_m"
+#define PARAM_NAME_AP_RX_LOSS_POLICY "ap_rx_loss_policy"
+#define PARAM_NAME_AP_MAX_DISTANCE_FROM_HOME "ap_max_distance_from_home"
+#define PARAM_NAME_AP_GEOFENCE_ACTION "ap_geofence_action"
+
+// Flight-plan OSD minimap
+#define PARAM_NAME_OSD_NAV_MAP_MODE "osd_nav_map_mode"
+#define PARAM_NAME_OSD_NAV_MAP_CENTRE "osd_nav_map_centre"
+#define PARAM_NAME_OSD_NAV_MAP_MIN_SCALE_M "osd_nav_map_min_scale_m"
+
+// Phase 3: L1 Nonlinear Guidance
+#define PARAM_NAME_AP_L1_ENABLE "ap_l1_enable"
+#define PARAM_NAME_AP_L1_PERIOD "ap_l1_period"
+#define PARAM_NAME_AP_L1_MIN_LOOKAHEAD "ap_l1_min_lookahead"
+#define PARAM_NAME_AP_L1_MAX_LOOKAHEAD "ap_l1_max_lookahead"
+#define PARAM_NAME_AP_L1_MAX_CROSS_TRACK_ERROR "ap_l1_max_cross_track_error"
+#define PARAM_NAME_AP_L1_TURN_RATE "ap_l1_turn_rate"
 
 #define PARAM_NAME_ANGLE_FEEDFORWARD "angle_feedforward"
 #define PARAM_NAME_ANGLE_FF_SMOOTHING_MS "angle_feedforward_smoothing_ms"
@@ -201,6 +302,7 @@
 #define PARAM_NAME_CHIRP_FREQUENCY_START_DECI_HZ "chirp_frequency_start_deci_hz"
 #define PARAM_NAME_CHIRP_FREQUENCY_END_DECI_HZ "chirp_frequency_end_deci_hz"
 #define PARAM_NAME_CHIRP_TIME_SECONDS "chirp_time_seconds"
+#define PARAM_NAME_CHIRP_REPEAT "chirp_repeat"
 
 #ifdef USE_GPS
 #define PARAM_NAME_GPS_PROVIDER "gps_provider"
@@ -226,10 +328,6 @@
 
 #define PARAM_NAME_GPS_RESCUE_RETURN_ALT "gps_rescue_return_alt"
 #define PARAM_NAME_GPS_RESCUE_GROUND_SPEED "gps_rescue_ground_speed"
-#define PARAM_NAME_GPS_RESCUE_MAX_RESCUE_ANGLE "gps_rescue_max_angle"
-#define PARAM_NAME_GPS_RESCUE_ROLL_MIX "gps_rescue_roll_mix"
-#define PARAM_NAME_GPS_RESCUE_PITCH_CUTOFF "gps_rescue_pitch_cutoff"
-#define PARAM_NAME_GPS_RESCUE_IMU_YAW_GAIN "gps_rescue_imu_yaw_gain"
 
 #define PARAM_NAME_GPS_RESCUE_DESCENT_DIST "gps_rescue_descent_dist"
 #define PARAM_NAME_GPS_RESCUE_DESCEND_RATE "gps_rescue_descend_rate"
@@ -239,15 +337,7 @@
 #define PARAM_NAME_GPS_RESCUE_MIN_SATS "gps_rescue_min_sats"
 #define PARAM_NAME_GPS_RESCUE_ALLOW_ARMING_WITHOUT_FIX "gps_rescue_allow_arming_without_fix"
 
-#define PARAM_NAME_GPS_RESCUE_VELOCITY_P "gps_rescue_velocity_p"
-#define PARAM_NAME_GPS_RESCUE_VELOCITY_I "gps_rescue_velocity_i"
-#define PARAM_NAME_GPS_RESCUE_VELOCITY_D "gps_rescue_velocity_d"
 #define PARAM_NAME_GPS_RESCUE_YAW_P "gps_rescue_yaw_p"
-
-#ifdef USE_MAG
-#define PARAM_NAME_GPS_RESCUE_USE_MAG "gps_rescue_use_mag"
-#endif // USE_MAG
-
 #endif // USE_GPS_RESCUE
 
 #ifdef USE_GPS_LAP_TIMER
@@ -265,7 +355,6 @@
 #endif
 
 #ifdef USE_POSITION_HOLD
-#define PARAM_NAME_POS_HOLD_WITHOUT_MAG "pos_hold_without_mag"
 #define PARAM_NAME_POS_HOLD_DEADBAND "pos_hold_deadband"
 #endif
 
@@ -276,4 +365,9 @@
 
 #ifdef USE_MAG
 #define PARAM_NAME_IMU_MAG_DECLINATION "mag_declination"
+#endif
+
+#ifdef USE_TRANSPONDER
+#define PARAM_NAME_TRANSPONDER_PROVIDER "transponder_provider"
+#define PARAM_NAME_TRANSPONDER_DATA "transponder_data"
 #endif

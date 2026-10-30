@@ -33,7 +33,8 @@
 
 typedef enum {
     FLASH_TYPE_NOR = 0,
-    FLASH_TYPE_NAND
+    FLASH_TYPE_NAND,
+    FLASH_TYPE_FRAM,
 } flashType_e;
 
 typedef uint16_t flashSector_t;
@@ -46,6 +47,9 @@ typedef struct flashGeometry_s {
     uint16_t pagesPerSector;
     flashType_e flashType;
     uint32_t jedecId;
+    uint32_t maxReadClkSPIHz;
+    int32_t bbReplacementBlocks;
+    uint8_t bufReadModeSet;
 } flashGeometry_t;
 
 typedef enum {
@@ -61,6 +65,7 @@ void flashPreinit(const flashConfig_t *flashConfig);
 bool flashInit(const flashConfig_t *flashConfig);
 
 bool flashIsReady(void);
+bool flashIsReadyOrFail(void);
 bool flashWaitForReady(void);
 void flashEraseSector(uint32_t address);
 void flashEraseCompletely(void);
@@ -71,6 +76,7 @@ void flashPageProgram(uint32_t address, const uint8_t *data, uint32_t length, vo
 int flashReadBytes(uint32_t address, uint8_t *buffer, uint32_t length);
 void flashFlush(void);
 const flashGeometry_t *flashGetGeometry(void);
+const char *flashTypeGetName(flashType_e type);
 
 void flashMemoryMappedModeDisable(void);
 void flashMemoryMappedModeEnable(void);

@@ -40,7 +40,7 @@
 #include "usbd_hid_cdc_wrapper.h"
 #endif
 #include "drivers/usb_io.h"
-#elif defined(STM32F7) || defined(STM32H7) || defined(STM32G4) || defined(STM32N6)
+#elif defined(STM32F7) || defined(STM32H5) || defined(STM32H7) || defined(STM32G4) || defined(STM32C5) || defined(STM32N6)
 #include "vcp_hal/usbd_cdc_interface.h"
 #include "drivers/usb_io.h"
 #ifdef USE_USB_CDC_HID
@@ -50,15 +50,15 @@ extern USBD_ClassTypeDef  USBD_HID_CDC;
 #endif
 USBD_HandleTypeDef USBD_Device;
 #else
-#include "usb_core.h"
-#include "usb_init.h"
-#include "hw_config.h"
+#error "Unsupported MCU family for USE_VCP"
 #endif
 
 #include "drivers/time.h"
 
 #include "drivers/serial.h"
 #include "drivers/serial_usb_vcp.h"
+
+#include "scheduler/scheduler.h"
 
 #define USB_TIMEOUT  50
 
@@ -136,6 +136,11 @@ static void usbVcpWriteBuf(serialPort_t *instance, const void *data, int count)
         count -= txed;
         p += txed;
 
+        if (count > 0) {
+            // USB backpressure wait is not task execution time.
+            schedulerIgnoreTaskExecTime();
+        }
+
         if (millis() - start > USB_TIMEOUT) {
             break;
         }
@@ -161,6 +166,11 @@ static bool usbVcpFlush(vcpPort_t *port)
         uint32_t txed = CDC_Send_DATA(p, count);
         count -= txed;
         p += txed;
+
+        if (count > 0) {
+            // USB backpressure wait is not task execution time.
+            schedulerIgnoreTaskExecTime();
+        }
 
         if (millis() - start > USB_TIMEOUT) {
             break;
@@ -233,7 +243,7 @@ void usbVcpInit(void)
         USBD_Init(&USB_OTG_dev, USB_OTG_FS_CORE_ID, &USR_desc, &USBD_CDC_cb, &USR_cb);
         break;
     }
-#elif defined(STM32F7) || defined(STM32H7) || defined(STM32G4) || defined(STM32N6)
+#elif defined(STM32F7) || defined(STM32H5) || defined(STM32H7) || defined(STM32G4) || defined(STM32C5) || defined(STM32N6)
 
     usbGenerateDisconnectPulse();
 
@@ -265,10 +275,7 @@ void usbVcpInit(void)
 #endif
 
 #else
-    Set_System();
-    Set_USBClock();
-    USB_Init();
-    USB_Interrupts_Config();
+#error "Unsupported MCU family for USE_VCP"
 #endif
 }
 
@@ -289,5 +296,20 @@ uint32_t usbVcpGetBaudRate(serialPort_t *instance)
 uint8_t usbVcpIsConnected(void)
 {
     return usbIsConnected();
+}
+
+uint8_t usbVcpIsActive(void)
+{
+    // Unplugging stops the SOFs, which suspends the device out of USBD_STATE_CONFIGURED.
+    // usbIsConnected() alone cannot see this: without VBUS sensing there is no disconnect
+    // interrupt, so the state never returns to USBD_STATE_DEFAULT.
+#if defined(STM32F4)
+    // F4 only updates the state usbIsConfigured() reads on enumeration or reset, so a pulled cable
+    // keeps looking configured; the OTG core does track the bus idle that a pulled cable causes.
+    if (USB_OTG_dev.dev.device_status != USB_OTG_CONFIGURED) {
+        return 0;
+    }
+#endif
+    return usbIsConnected() && usbIsConfigured();
 }
 #endif

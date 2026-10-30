@@ -25,8 +25,8 @@
  * result in the file pointer being pointed at the first free block found, or at the end of the device if the
  * flash chip is full.
  *
- * Note that bits can only be set to 0 when writing, not back to 1 from 0. You must erase sectors in order
- * to bring bits back to 1 again.
+ * Flash devices require an erase before bits can return to 1.  Byte-writable
+ * devices such as F-RAM emulate the same erased (0xFF) storage semantics.
  *
  * In future, we can add support for multiple different flash chips by adding a flash device driver vtable
  * and make calls through that, at the moment flashfs just calls m25p16_* routines explicitly.
@@ -45,6 +45,7 @@
 #include "common/printf.h"
 #include "drivers/flash/flash.h"
 #include "drivers/light_led.h"
+#include "drivers/time.h"
 
 #include "io/flashfs.h"
 
@@ -58,6 +59,7 @@ static const flashGeometry_t *flashGeometry = NULL;
 static uint32_t flashfsSize = 0;
 static flashfsState_e flashfsState = FLASHFS_IDLE;
 static flashSector_t eraseSectorCurrent = 0;
+static bool eraseOperationIsChipErase = false;
 
 static DMA_DATA_ZERO_INIT uint8_t flashWriteBuffer[FLASHFS_WRITE_BUFFER_SIZE];
 
@@ -74,13 +76,14 @@ static DMA_DATA_ZERO_INIT uint8_t flashWriteBuffer[FLASHFS_WRITE_BUFFER_SIZE];
 static uint8_t bufferHead = 0;
 static volatile uint8_t bufferTail = 0;
 
-/* Track if there is new data to write. Until the contents of the buffer have been completely
- * written flashfsFlushAsync() will be repeatedly called. The tail pointer is only updated
- * once an asynchronous write has completed. To do so any earlier could result in data being
- * overwritten in the ring buffer. This routine checks that flashfsFlushAsync() should attempt
- * to write new data and avoids it writing old data during the race condition that occurs if
- * its called again before the previous write to FLASH has completed.
-  */
+/* Track whether the write interlock is clear, i.e. whether the buffers may be presented to the
+ * device. It is cleared while a write is outstanding and set again once the completion callback
+ * has advanced the tail, or immediately if the driver accepted nothing so no callback will come.
+ * The tail pointer is only updated once an asynchronous write has completed; to do so any earlier
+ * could result in data being overwritten in the ring buffer. flashfsFlushAsync(), flashfsFlushSync()
+ * and flashfsWrite() all check this to avoid re-presenting old data during the race condition that
+ * occurs if they are called again before the previous write to FLASH has completed.
+ */
 static volatile bool dataWritten = true;
 
 // The position of the buffer's tail in the overall flash address space:
@@ -107,7 +110,7 @@ static uint8_t checkFlashNextByte(void)
 // Called from blackboxSetState() to start/stop writing of pseudo-random data to FLASH
 void checkFlashStart(void)
 {
-    DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 0, 1);
+    DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 0, 1);  //!< Test State
     checkFlashSeedPRBS = 0xdeadbeef;
     checkFlashPtr = tailAddress;
     checkFlashLen = 0;
@@ -119,7 +122,7 @@ void checkFlashStop(void)
     checkFlashSeedPRBS = 0xdeadbeef;
     checkFlashErrors = 0;
 
-    DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 6, checkFlashLen / flashGeometry->pageSize);
+    DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 6, checkFlashLen / flashGeometry->pageSize);  //!< Pages In Check Length
 
     // Verify the data written since flashfsSeekAbs() last called
     while (checkFlashLen) {
@@ -141,7 +144,7 @@ void checkFlashStop(void)
         checkFlashLen -= checkLen;
     }
 
-    DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 7, checkFlashErrors);
+    DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 7, checkFlashErrors);  //!< Error Count
 
     checkFlashActive = false;
 }
@@ -165,13 +168,18 @@ static void flashfsSetTailAddress(uint32_t address)
 void flashfsEraseCompletely(void)
 {
     if (flashGeometry->sectors > 0 && flashPartitionCount() > 0) {
-        // if there's a single FLASHFS partition and it uses the entire flash then do a full erase
-        const bool doFullErase = (flashPartitionCount() == 1) && (FLASH_PARTITION_SECTOR_COUNT(flashPartition) == flashGeometry->sectors);
+        // If there's a single FLASHFS partition and it uses the entire NOR flash then do a full erase.
+        const bool doFullErase = flashGeometry->flashType == FLASH_TYPE_NOR
+            && (flashPartitionCount() == 1)
+            && (FLASH_PARTITION_SECTOR_COUNT(flashPartition) == flashGeometry->sectors);
         if (doFullErase) {
             flashEraseCompletely();
+            eraseOperationIsChipErase = true;
+            flashfsState = FLASHFS_ERASING;
         } else {
             // start asynchronous erase of all sectors
             eraseSectorCurrent = flashPartition->startSector;
+            eraseOperationIsChipErase = false;
             flashfsState = FLASHFS_ERASING;
         }
     }
@@ -215,11 +223,6 @@ bool flashfsIsReady(void)
     // Check for flash chip existence first, then check if idle and ready.
 
     return (flashfsIsSupported() && (flashfsState == FLASHFS_IDLE) && flashIsReady());
-}
-
-bool flashfsIsEraseInProgress(void)
-{
-    return flashfsState == FLASHFS_ERASING;
 }
 
 bool flashfsIsSupported(void)
@@ -329,6 +332,14 @@ static uint32_t flashfsWriteBuffers(uint8_t const **buffers, uint32_t *bufferSiz
 
     bytesWritten = flashPageProgramContinue(buffers, bufferSizes, bufferCount);
 
+    if (bytesWritten == 0) {
+        /* A driver that accepted nothing will not invoke the completion callback, so release
+         * the interlock here rather than waiting for one that never arrives. The buffers stay
+         * dirty and are presented again on the next flush.
+         */
+        dataWritten = true;
+    }
+
     flashPageProgramFinish();
 
     return bytesWritten;
@@ -432,6 +443,10 @@ void flashfsFlushSync(void)
         return; // Nothing to flush
     }
 
+    // Wait for any outstanding asynchronous write to be acknowledged before re-reading
+    // the buffer pointers, otherwise the same bytes would be presented to the device twice.
+    while (!flashfsNewData());
+
     bufCount = flashfsGetDirtyDataBuffers(buffers, bufferSizes);
     if (bufCount) {
         flashfsWriteBuffers(buffers, bufferSizes, bufCount, true);
@@ -446,7 +461,16 @@ void flashfsFlushSync(void)
 void flashfsEraseAsync(void)
 {
     if (flashfsState == FLASHFS_ERASING) {
-        if ((flashfsIsSupported() && flashIsReady())) {
+        if (eraseOperationIsChipErase) {
+            if (flashIsReadyOrFail()) {
+                eraseOperationIsChipErase = false;
+                flashfsState = FLASHFS_IDLE;
+                LED1_OFF;
+            }
+            return;
+        }
+
+        if (flashIsReady()) {
             if (eraseSectorCurrent <= flashPartition->endSector) {
                 // Erase sector
                 uint32_t sectorAddress = eraseSectorCurrent * flashGeometry->sectorSize;
@@ -481,7 +505,7 @@ void flashfsWriteByte(uint8_t byte)
     if (checkFlashActive) {
         byte = checkFlashNextByte();
         checkFlashLen++;
-        DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 2, checkFlashLen);
+        DEBUG_SET(DEBUG_FLASH_TEST_PRBS, 2, checkFlashLen);  //!< Checked Length [unit:bytes]
     }
 #endif
 
@@ -514,6 +538,20 @@ void flashfsWrite(const uint8_t *data, unsigned int len, bool sync)
         flashfsWriteByte(data[i]);
     }
 
+    /* An asynchronous write may still be outstanding, in which case bufferTail has not been
+     * advanced yet and the bytes it points at have already been presented to the device.
+     * Presenting them again has both completions counted, advancing bufferTail past bufferHead
+     * and tailAddress beyond the data actually logged; on NAND the driver additionally appends
+     * the repeat at its own load address, duplicating those bytes in the log. This check must
+     * precede flashfsGetDirtyDataBuffers() below, as it is the captured descriptors that go
+     * stale. Bail out as flashfsFlushAsync() does, or wait for the callback if sync was asked.
+     */
+    if (sync) {
+        while (!flashfsNewData());
+    } else if (!flashfsNewData()) {
+        return;
+    }
+
     // There could be two dirty buffers to write out already:
     bufCount = flashfsGetDirtyDataBuffers(buffers, bufferSizes);
     totalBufSize = bufferSizes[0] + bufferSizes[1];
@@ -534,20 +572,15 @@ void flashfsWrite(const uint8_t *data, unsigned int len, bool sync)
  */
 int flashfsReadAbs(uint32_t address, uint8_t *buffer, unsigned int len)
 {
-    int bytesRead;
-
-    // Did caller try to read past the end of the volume?
-    if (address + len > flashfsSize) {
-        // Truncate their request
-        len = flashfsSize - address;
+    len = flashfsReadLength(flashfsSize, address, len);
+    if (!len) {
+        return 0;
     }
 
     // Since the read could overlap data in our dirty buffers, force a sync to clear those first
     flashfsFlushSync();
 
-    bytesRead = flashReadBytes(address, buffer, len);
-
-    return bytesRead;
+    return flashReadBytes(address, buffer, len);
 }
 
 /**
@@ -633,6 +666,7 @@ void flashfsClose(void)
 {
     switch(flashGeometry->flashType) {
     case FLASH_TYPE_NOR:
+    case FLASH_TYPE_FRAM:
         break;
 
     case FLASH_TYPE_NAND:
@@ -673,6 +707,11 @@ void flashfsInit(void)
 bool flashfsVerifyEntireFlash(void)
 {
     flashfsEraseCompletely();
+
+    while (!flashfsIsReady()) {
+        flashfsEraseAsync();
+        delay(100);
+    }
 
     uint32_t address = 0;
     flashfsSeekAbs(address);

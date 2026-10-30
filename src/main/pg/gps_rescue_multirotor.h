@@ -26,27 +26,28 @@
 
 #include "pg/pg.h"
 
+#define GPS_RESCUE_GROUND_SPEED_MAX 3000
+#define GPS_RESCUE_DESCENT_DIST_MIN_M 5
+#define GPS_RESCUE_DESCENT_DIST_MAX_M 500
+#define GPS_RESCUE_YAW_P_MAX 200
+
 typedef struct gpsRescue_s {
 
-    uint16_t maxRescueAngle; // degrees
-    uint16_t returnAltitudeM; // meters
-    uint16_t descentDistanceM; // meters
-    uint16_t groundSpeedCmS; // centimeters per second
-    uint8_t  yawP;
-    uint8_t  minSats;
-    uint8_t  velP, velI, velD;
     uint16_t minStartDistM; // meters
-    uint8_t  sanityChecks;
-    uint8_t  allowArmingWithoutFix;
-    uint8_t  useMag;
     uint8_t  altitudeMode;
-    uint16_t ascendRate;
-    uint16_t descendRate;
     uint16_t initialClimbM; // meters
-    uint8_t  rollMix;
-    uint8_t  disarmThreshold;
-    uint8_t  pitchCutoffHz;
-    uint8_t  imuYawGain;
+    uint16_t ascendRate;
+
+    uint16_t returnAltitudeM; // meters
+    uint16_t groundSpeedCmS; // centimeters per second
+
+    uint16_t descentDistanceM; // meters
+    uint16_t descendRate;
+    uint8_t  sanityChecks;
+    uint8_t  minSats;
+    uint8_t  allowArmingWithoutFix;
+
+    uint8_t  yawP;
 } gpsRescueConfig_t;
 
 PG_DECLARE(gpsRescueConfig_t, gpsRescueConfig);

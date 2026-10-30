@@ -23,16 +23,47 @@
 
 #ifdef USE_WING
 
-#include "flight/autopilot.h"
-
 #include "pg/pg.h"
 #include "pg/pg_ids.h"
 
-#include "autopilot.h"
+#include "autopilot_wing.h"
 
-PG_REGISTER_WITH_RESET_TEMPLATE(autopilotConfig_t, autopilotConfig, PG_AUTOPILOT, 2);
+PG_REGISTER_WITH_RESET_TEMPLATE(autopilotWingConfig_t, autopilotWingConfig, PG_AUTOPILOT_WING, 0);
 
-PG_RESET_TEMPLATE(autopilotConfig_t, autopilotConfig,
+PG_RESET_TEMPLATE(autopilotWingConfig_t, autopilotWingConfig,
+    .cruiseThrottle = 50,
+    .minThrottle = 25,
+    .maxThrottle = 90,
+    .bankThrottle = 10,
+    .maxClimbAngle = 15,
+    .maxDiveAngle = 12,
+    .maxClimbRate = 30,
+    .maxSinkRate = 30,
+    .altTimeConstant = 40,
+    .climbP = 10,
+    .climbI = 10,
+    .vertAccel = 50,
+    .cruiseSpeed = 150,
+    .turnPitchFf = 100,
+    .turnYawFf = 100,
+    .maxBank = 35,
+    .l1Period = 130,
+    .l1Damping = 75,
+    .loiterRadius = 60,
+    .loiterDirection = WING_LOITER_RIGHT,
+    .landHeading = -1,
+    .landSide = WING_LOITER_LEFT,
+    .landFinalLength = 150,
+    .landGlideAngle = 8,
+    .landApproachAlt = 30,
+    .landFlareHeight = 300,
+    .landFlarePitch = 5,
+    .landFlareSink = 5,
+    .landFinalBank = 15,
+    .landSlopeTolerance = 10,
+    .landAttempts = 3,
+    .landMaxTailwind = 30,
+    .landLaunchHeight = 150,
 );
 
 #endif // USE_WING

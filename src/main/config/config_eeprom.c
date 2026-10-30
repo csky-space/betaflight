@@ -296,6 +296,12 @@ void initEEPROM(void)
     STATIC_ASSERT(sizeof(configFooter_t) == 2, footer_size_failed);
     STATIC_ASSERT(sizeof(configRecord_t) == 6, record_size_failed);
 
+#if defined(ENABLE_CONFIG_FLASH_INIT)
+    // Map the flash-resident config into the readable memory window before the
+    // memory-mapped reads below (ensureEEPROMStructureIsValid / readEEPROM).
+    configFlashInit();
+#endif
+
 #if defined(CONFIG_IN_FILE)
     bool eepromLoaded = loadEEPROMFromFile();
     if (!eepromLoaded) {
@@ -440,6 +446,42 @@ bool loadEEPROM(void)
     }
 
     return success;
+}
+
+configResetReason_e diagnoseEEPROM(uint16_t *detail)
+{
+    const configHeader_t *header = (const configHeader_t *)&__config_start;
+
+    *detail = 0;
+
+    if (header->magic_be != 0xBE) {
+        const bool erased = header->eepromConfigVersion == header->magic_be
+            && (header->magic_be == 0xFF || header->magic_be == 0x00);
+        return erased ? CONFIG_RESET_EMPTY : CONFIG_RESET_CORRUPT;
+    }
+
+    if (!isEEPROMStructureValid()) {
+        return CONFIG_RESET_CORRUPT;
+    }
+
+    if (header->eepromConfigVersion != EEPROM_CONF_VERSION) {
+        *detail = header->eepromConfigVersion;
+        return CONFIG_RESET_VERSION;
+    }
+
+    PG_FOREACH(reg) {
+        const configRecord_t *rec = findEEPROM(reg, CR_CLASSICATION_SYSTEM);
+        if (!rec) {
+            *detail = pgN(reg);
+            return CONFIG_RESET_PG_MISSING;
+        }
+        if (rec->version != pgVersion(reg)) {
+            *detail = pgN(reg);
+            return CONFIG_RESET_PG_VERSION;
+        }
+    }
+
+    return CONFIG_RESET_NONE;
 }
 
 static bool writeSettingsToEEPROM(void)

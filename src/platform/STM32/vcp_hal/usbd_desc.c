@@ -54,23 +54,22 @@
 
 #include "pg/pg.h"
 #include "pg/usb.h"
+#include "drivers/usb_descriptor.h"
 #ifdef USE_USB_MSC
 #include "drivers/usb_msc.h"
 #endif
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
+#ifndef USBD_VID
 #define USBD_VID                      0x0483
+#endif
+#ifndef USBD_PID
 #define USBD_PID                      0x5740
+#endif
 #define USBD_LANGID_STRING            0x409
+#ifndef USBD_MANUFACTURER_STRING
 #define USBD_MANUFACTURER_STRING      FC_FIRMWARE_NAME
-
-#ifdef USBD_PRODUCT_STRING
-#define USBD_PRODUCT_HS_STRING          USBD_PRODUCT_STRING
-#define USBD_PRODUCT_FS_STRING          USBD_PRODUCT_STRING
-#else
-#define USBD_PRODUCT_HS_STRING        "STM32 Virtual ComPort in HS Mode"
-#define USBD_PRODUCT_FS_STRING        "STM32 Virtual ComPort in FS Mode"
 #endif
 
 #define USBD_CONFIGURATION_HS_STRING  "VCP Config"
@@ -230,14 +229,14 @@ uint8_t *USBD_VCP_LangIDStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length)
   */
 uint8_t *USBD_VCP_ProductStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length)
 {
-  if (speed == USBD_SPEED_HIGH)
-  {
-    USBD_GetString((uint8_t *)USBD_PRODUCT_HS_STRING, USBD_StrDesc, length);
+  (void)speed;
+#ifdef USE_USB_MSC
+  if (mscCheckBootAndReset()) {
+    USBD_GetString((uint8_t *)usbDescriptorMscProductString(), USBD_StrDesc, length);
+    return USBD_StrDesc;
   }
-  else
-  {
-    USBD_GetString((uint8_t *)USBD_PRODUCT_FS_STRING, USBD_StrDesc, length);
-  }
+#endif
+  USBD_GetString((uint8_t *)usbDescriptorProductString(), USBD_StrDesc, length);
   return USBD_StrDesc;
 }
 

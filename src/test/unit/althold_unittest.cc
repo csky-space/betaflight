@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <string.h>
 
 extern "C" {
 
@@ -39,10 +40,12 @@ extern "C" {
     #include "flight/pid.h"
     #include "flight/position.h"
     #include "flight/position_estimator.h"
+    #include "flight/position_nav.h"
 
     #include "io/gps.h"
 
     #include "rx/rx.h"
+    #include "scheduler/scheduler.h"
 
     #include "pg/alt_hold.h"
     #include "pg/autopilot.h"
@@ -60,6 +63,19 @@ extern "C" {
     bool failsafeIsActive(void) { return false; }
     timeUs_t currentTimeUs = 0;
     bool isAltHoldActive();
+    extern float testAltitudeCm;
+    extern float testAltitudeDerivativeCmS;
+    extern float testAltitudeAccelerationCmS;
+    extern float testCosTiltAngle;
+    extern throttleStatus_e testThrottleStatus;
+    extern bool testEstimatorUpdatePending;
+    extern timeDelta_t testTaskDeltaTimeUs;
+    extern bool testNavActive;
+    extern bool testNavReached;
+    extern positionNavCommand_t testNavCommand;
+    extern vector3_t testNavTargetVelCmS;
+    extern float testNavTargetAltCm;
+    extern float testNavRateLimitCmS;
 }
 
 #include "unittest_macros.h"
@@ -69,6 +85,51 @@ uint32_t millisRW;
 uint32_t millis() {
     return millisRW;
 }
+
+class AltholdControlUnittest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        memset(&attitude, 0, sizeof(attitude));
+        memset(&gpsSol, 0, sizeof(gpsSol));
+        memset(rcCommand, 0, sizeof(rcCommand));
+        flightModeFlags = 0;
+        millisRW = 0;
+        testAltitudeCm = 0.0f;
+        testAltitudeDerivativeCmS = 0.0f;
+        testAltitudeAccelerationCmS = 0.0f;
+        testCosTiltAngle = 1.0f;
+        testThrottleStatus = THROTTLE_LOW;
+        testEstimatorUpdatePending = false;
+        testTaskDeltaTimeUs = TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ);
+        testNavActive = false;
+        testNavReached = false;
+        memset(&testNavCommand, 0, sizeof(testNavCommand));
+        testNavTargetVelCmS = (vector3_t){{0, 0, 0}};
+        testNavTargetAltCm = 0.0f;
+        testNavRateLimitCmS = 0.0f;
+
+        autopilotConfig_t *apCfg = autopilotConfigMutable();
+        apCfg->hoverThrottle = 1500;
+        apCfg->throttleMin = 1000;
+        apCfg->throttleMax = 2000;
+        apCfg->altitudeP = 50;
+        apCfg->altitudeI = 50;
+        apCfg->altitudeD = 50;
+        apCfg->altitudeA = 50;
+        apCfg->altitudeF = 0;
+        apCfg->landingAltitudeM = 5;
+
+        altHoldConfig_t *ahCfg = altHoldConfigMutable();
+        ahCfg->deadband = 10;
+        ahCfg->climbRate = 50;
+
+        rxConfigMutable()->mincheck = 1050;
+
+        autopilotInit();
+        altHoldInit();
+        resetAltitudeControl();
+    }
+};
 
 TEST(AltholdUnittest, altHoldTransitionsTest)
 {
@@ -106,7 +167,7 @@ TEST(AltholdUnittest, altHoldCapturesHoverThrottleWhenConfigZero)
 {
     altHoldInit();
     autopilotConfigMutable()->hoverThrottle = 0;
-    rcCommand[THROTTLE] = 1450.0f;
+    rcCommand[THROTTLE] = rcUsToThrottle(1450);
 
     flightModeFlags |= ALT_HOLD_MODE;
     updateAltHold(currentTimeUs);
@@ -115,6 +176,164 @@ TEST(AltholdUnittest, altHoldCapturesHoverThrottleWhenConfigZero)
     flightModeFlags &= ~ALT_HOLD_MODE;
     updateAltHold(currentTimeUs);
     EXPECT_EQ(autopilotGetEffectiveHoverThrottlePwm(), AP_HOVER_THROTTLE_DEFAULT);
+}
+
+TEST_F(AltholdControlUnittest, AltitudeControlRaisesThrottleWhenBelowTarget)
+{
+    testAltitudeCm = 0.0f;
+    testAltitudeDerivativeCmS = 0.0f;
+    testAltitudeAccelerationCmS = 0.0f;
+    altitudeControl(100.0f, TASK_PERIOD_HZ(100), 0.0f, 500.0f);
+    const float belowTargetThrottle = getAutopilotThrottle();
+
+    resetAltitudeControl();
+    testAltitudeCm = 200.0f;
+    testAltitudeDerivativeCmS = 0.0f;
+    testAltitudeAccelerationCmS = 0.0f;
+    altitudeControl(100.0f, TASK_PERIOD_HZ(100), 0.0f, 500.0f);
+    const float aboveTargetThrottle = getAutopilotThrottle();
+
+    EXPECT_GT(belowTargetThrottle, aboveTargetThrottle);
+}
+
+// The A term opposes measured vertical acceleration: altitudeA = -acceleration * altitudeKa,
+// so climbing acceleration must take throttle off. Getting that sign wrong would turn it into
+// positive feedback on vertical acceleration, and no other test would notice - every other
+// case in this file holds testAltitudeAccelerationCmS at zero.
+//
+// Altitude and vertical velocity are held exactly at target so P, I, D and F all contribute
+// nothing and the A term is the only thing that differs between the two scenarios.
+TEST_F(AltholdControlUnittest, AltitudeControlLowersThrottleWhenAcceleratingUpward)
+{
+    testAltitudeCm = 100.0f;
+    testAltitudeDerivativeCmS = 0.0f;
+    testAltitudeAccelerationCmS = 0.0f;
+    altitudeControl(100.0f, TASK_PERIOD_HZ(100), 0.0f, 500.0f);
+    const float noAccelerationThrottle = getAutopilotThrottle();
+
+    resetAltitudeControl();
+    testAltitudeCm = 100.0f;
+    testAltitudeDerivativeCmS = 0.0f;
+    testAltitudeAccelerationCmS = 200.0f; // accelerating upward
+    altitudeControl(100.0f, TASK_PERIOD_HZ(100), 0.0f, 500.0f);
+    const float upwardAccelerationThrottle = getAutopilotThrottle();
+
+    // altitudeKa is 50 * 0.006 = 0.3, so this is roughly 60 PWM of opposition.
+    EXPECT_LT(upwardAccelerationThrottle, noAccelerationThrottle);
+}
+
+TEST_F(AltholdControlUnittest, AltitudeControlRespectsVelocityLimit)
+{
+    testAltitudeCm = 0.0f;
+    testAltitudeDerivativeCmS = 0.0f;
+    testAltitudeAccelerationCmS = 0.0f;
+    altitudeControl(200.0f, TASK_PERIOD_HZ(100), 0.0f, 100.0f);
+    const float limitedThrottle = getAutopilotThrottle();
+
+    resetAltitudeControl();
+    altitudeControl(800.0f, TASK_PERIOD_HZ(100), 0.0f, 1000.0f);
+    const float highLimitThrottle = getAutopilotThrottle();
+
+    EXPECT_GT(highLimitThrottle, limitedThrottle);
+}
+
+TEST_F(AltholdControlUnittest, AltitudeControlCompensatesForTilt)
+{
+    testAltitudeCm = 100.0f;
+    testAltitudeDerivativeCmS = 0.0f;
+    testAltitudeAccelerationCmS = 0.0f;
+    testCosTiltAngle = 1.0f;
+    altitudeControl(100.0f, TASK_PERIOD_HZ(100), 0.0f, 500.0f);
+    const float levelThrottle = getAutopilotThrottle();
+
+    resetAltitudeControl();
+    testCosTiltAngle = 0.5f;
+    altitudeControl(100.0f, TASK_PERIOD_HZ(100), 0.0f, 500.0f);
+    const float tiltedThrottle = getAutopilotThrottle();
+
+    EXPECT_GT(tiltedThrottle, levelThrottle);
+}
+
+// TASK_ALTHOLD is event driven off positionEstimatorUpdate() rather than run on a
+// fixed period, so it starts as soon as a new altitude estimate exists.
+TEST_F(AltholdControlUnittest, AltHoldIsScheduledByEstimatorUpdates)
+{
+    // Nothing published and no time elapsed: nothing to do
+    EXPECT_FALSE(altHoldUpdateCheck(currentTimeUs, 0));
+
+    // A new estimate schedules the task, and only once
+    testEstimatorUpdatePending = true;
+    EXPECT_TRUE(altHoldUpdateCheck(currentTimeUs, 0));
+    EXPECT_FALSE(altHoldUpdateCheck(currentTimeUs, 0));
+
+    // With no estimator running, periodic scheduling still services transitions
+    EXPECT_FALSE(altHoldUpdateCheck(currentTimeUs, TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ)));
+    EXPECT_TRUE(altHoldUpdateCheck(currentTimeUs, 2 * TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ)));
+}
+
+// Event driven scheduling makes the task interval the estimator's, so dt has to
+// be measured. It is bounded, so a first run or a starved one cannot hand the
+// integrators an arbitrarily large step.
+TEST_F(AltholdControlUnittest, TaskIntervalIsMeasuredAndBounded)
+{
+    const timeUs_t nominalUs = TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ);
+
+    testTaskDeltaTimeUs = nominalUs;
+    EXPECT_EQ(autopilotTaskIntervalUs(nominalUs), nominalUs);
+
+    testTaskDeltaTimeUs = TASK_PERIOD_HZ(200);
+    EXPECT_EQ(autopilotTaskIntervalUs(nominalUs), (timeUs_t)5000);
+
+    testTaskDeltaTimeUs = TASK_PERIOD_HZ(50);
+    EXPECT_EQ(autopilotTaskIntervalUs(nominalUs), (timeUs_t)20000);
+
+    testTaskDeltaTimeUs = 0; // no measurement yet
+    EXPECT_EQ(autopilotTaskIntervalUs(nominalUs), nominalUs);
+
+    testTaskDeltaTimeUs = 10 * nominalUs;
+    EXPECT_EQ(autopilotTaskIntervalUs(nominalUs), 4 * nominalUs);
+
+    testTaskDeltaTimeUs = TASK_PERIOD_HZ(10000);
+    EXPECT_EQ(autopilotTaskIntervalUs(nominalUs), nominalUs / 4);
+}
+
+// The measured interval has to reach the control law: with the same altitude
+// error, a longer interval must integrate proportionally more.
+TEST_F(AltholdControlUnittest, AltHoldIntegratesOverTheMeasuredInterval)
+{
+    auto throttleAfterOneStep = [](timeDelta_t intervalUs) {
+        flightModeFlags &= ~ALT_HOLD_MODE;
+        updateAltHold(currentTimeUs);   // leave alt hold, clearing the integrator
+        testAltitudeCm = 0.0f;
+        testTaskDeltaTimeUs = intervalUs;
+        flightModeFlags |= ALT_HOLD_MODE;
+        updateAltHold(currentTimeUs);   // enter, capturing a target of 0 cm
+        testAltitudeCm = -100.0f;       // now 1 m below the target
+        updateAltHold(currentTimeUs);   // one control step at the given interval
+        return getAutopilotThrottle();
+    };
+
+    const float shortStep = throttleAfterOneStep(TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ));
+    const float longStep = throttleAfterOneStep(4 * TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ));
+
+    EXPECT_GT(longStep, shortStep);
+}
+
+TEST_F(AltholdControlUnittest, NavLegClimbFeedforwardOutlivesTheLegsCompletion)
+{
+    // A leg that completes mid-climb still walks its altitude ramp on, and the rate it walks it at
+    // stays in the feedforward: dropping it there is a throttle step against a target still moving.
+    autopilotConfigMutable()->altitudeF = 30;
+    autopilotInit();
+    flightModeFlags |= ALT_HOLD_MODE;
+    testNavActive = true;
+    testNavReached = true;
+    testNavCommand.includeAltitude = true;
+    testNavTargetVelCmS = (vector3_t){{0, 0, 200.0f}};
+    testNavRateLimitCmS = 500.0f;
+    debugMode = DEBUG_AUTOPILOT_ALTITUDE;
+    updateAltHold(currentTimeUs);
+    EXPECT_EQ(debug[7], 120);   // altitude_f 30 at 0.02 us per cm/s, on the ramp's 200 cm/s
 }
 
 // STUBS
@@ -129,19 +348,39 @@ extern "C" {
     acc_t acc;
     attitudeEulerAngles_t attitude;
     gpsSolutionData_t gpsSol;
+    gyro_t gyro;
 
-    float getAltitudeCm(void) { return 0.0f; }
-    float getAltitudeDerivative(void) { return 0.0f; }
-    float getAltitudeCmControl(void) { return 0.0f; }
-    float getAltitudeDerivativeControl(void) { return 0.0f; }
-    float getCosTiltAngle(void) { return 0.0f; }
+    float testAltitudeCm = 0.0f;
+    float testAltitudeDerivativeCmS = 0.0f;
+    float testAltitudeAccelerationCmS = 0.0f;
+    float testCosTiltAngle = 1.0f;
+    throttleStatus_e testThrottleStatus = THROTTLE_LOW;
+
+    float getAltitudeCm(void) { return testAltitudeCm; }
+    float getAltitudeDerivative(void) { return testAltitudeDerivativeCmS; }
+    float getAltitudeCmControl(void) { return testAltitudeCm; }
+    float getAltitudeAccelerationControl(void) { return testAltitudeAccelerationCmS; }
+    float getAltitudeDerivativeControl(void) { return testAltitudeDerivativeCmS; }
+    float getCosTiltAngle(void) { return testCosTiltAngle; }
     float getGpsDataIntervalSeconds(void) { return 0.01f; }
-    float getGpsDataFrequencyHz(void) { return 10.0f; }
+
     float rcCommand[4];
+    bool imuIsHeadingValid(void) { return true; }
 
     bool gpsHasNewData(uint16_t* gpsStamp) {
         UNUSED(*gpsStamp);
         return true;
+    }
+    float getSetpointRate(int axis)
+    {
+        UNUSED(axis);
+        return 0.0f;
+    }
+
+    float getMaxRcRate(int axis)
+    {
+        UNUSED(axis);
+        return 720.0f; // nonzero: autopilotInit divides maxVelocity by this
     }
 
     void GPS_distance2d(const gpsLocation_t* /*from*/, const gpsLocation_t* /*to*/, vector2_t* /*dest*/) { }
@@ -152,12 +391,44 @@ extern "C" {
     void positionEstimatorEnableXY(bool /*enable*/) { }
     bool positionEstimatorIsValidXY(void) { return false; }
 
+    bool testEstimatorUpdatePending = false;
+    bool positionEstimatorTakeUpdate(positionEstimatorConsumer_e /*consumer*/)
+    {
+        const bool pending = testEstimatorUpdatePending;
+        testEstimatorUpdatePending = false;
+        return pending;
+    }
+
+    void positionNavInit(void) { }
+    void positionNavReset(void) { }
+    void positionNavUpdate(float /*dt*/, const positionEstimate3d_t * /*est*/) { }
+    bool testNavActive = false;
+    bool testNavReached = false;
+    positionNavCommand_t testNavCommand;
+    vector3_t testNavTargetVelCmS;
+    float testNavTargetAltCm = 0.0f;
+    float testNavRateLimitCmS = 0.0f;
+    bool positionNavHasActiveTarget(void) { return testNavActive; }
+    bool positionNavTargetReached(void) { return testNavReached; }
+    vector3_t positionNavGetTargetVelocityCmS(void) { return testNavTargetVelCmS; }
+    float positionNavGetTargetAltitudeCm(void) { return testNavTargetAltCm; }
+    float positionNavGetVerticalRateLimitCmS(void) { return testNavRateLimitCmS; }
+    const positionNavCommand_t *positionNavGetActiveCommand(void) { return testNavActive ? &testNavCommand : NULL; }
+
     void parseRcChannels(const char *input, rxConfig_t *rxConfig) {
         UNUSED(input);
         UNUSED(rxConfig);
     }
 
-    throttleStatus_e calculateThrottleStatus() {
-        return THROTTLE_LOW;
+    // The alt hold task is event driven, so its interval is whatever the position
+    // estimator delivers. Tests set this to check that dt is measured, not assumed.
+    timeDelta_t testTaskDeltaTimeUs = TASK_PERIOD_HZ(ALTHOLD_TASK_RATE_HZ);
+
+    timeDelta_t getTaskDeltaTimeUs(taskId_e taskId)
+    {
+        UNUSED(taskId);
+        return testTaskDeltaTimeUs;
     }
+
+    throttleStatus_e calculateThrottleStatus() { return testThrottleStatus; }
 }
